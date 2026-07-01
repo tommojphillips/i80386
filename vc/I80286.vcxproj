@@ -128,17 +128,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="..\src\i8086.h" />
-    <ClInclude Include="..\src\i8086_alu.h" />
-    <ClInclude Include="..\src\i8086_mnem.h" />
-    <ClInclude Include="..\src\i8086_muldiv.h" />
+    <ClInclude Include="..\src\i80286.h" />
+    <ClInclude Include="..\src\i80286_alu.h" />
+    <ClInclude Include="..\src\i80286_mnem.h" />
     <ClInclude Include="..\src\sign_extend.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\src\i8086 _mnem.c" />
-    <ClCompile Include="..\src\i8086.c" />
-    <ClCompile Include="..\src\i8086_alu.c" />
-    <ClCompile Include="..\src\i8086_muldiv.c" />
+    <ClCompile Include="..\src\i80286_mnem.c" />
+    <ClCompile Include="..\src\i80286.c" />
+    <ClCompile Include="..\src\i80286_alu.c" />
     <ClCompile Include="..\src\sign_extend.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
