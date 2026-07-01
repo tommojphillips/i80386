@@ -1,74 +1,92 @@
-/* i8086.c
+/* i80286.c
  * Thomas J. Armytage 2025 ( https://github.com/tommojphillips/ )
  * Intel 8086 CPU
  */
 
 #include <stdint.h>
 
-#include "i8086.h"
-#include "i8086_alu.h"
+#include "i80286.h"
+#include "i80286_alu.h"
 #include "sign_extend.h"
 
-#define PSW cpu->status.word
-
-#define DBZ cpu->dbz
+#define PSW cpu->psw.u.word
+#define MSW cpu->msw.u.word
 #define NMI cpu->nmi
 #define INTR cpu->intr
 
-#define SF cpu->status.sf
-#define CF cpu->status.cf
-#define ZF cpu->status.zf
-#define PF cpu->status.pf
-#define OF cpu->status.of
-#define AF cpu->status.af
-#define DF cpu->status.df
-#define TF cpu->status.tf
-#define IF cpu->status.in
+#define SF cpu->psw.u.bits.sf
+#define CF cpu->psw.u.bits.cf
+#define ZF cpu->psw.u.bits.zf
+#define PF cpu->psw.u.bits.pf
+#define OF cpu->psw.u.bits.of
+#define AF cpu->psw.u.bits.af
+#define DF cpu->psw.u.bits.df
+#define TF cpu->psw.u.bits.tf
+#define IF cpu->psw.u.bits.in
+
+#define PE cpu->msw.u.bits.pe
+#define MP cpu->msw.u.bits.mp
+#define EM cpu->msw.u.bits.em
+#define TS cpu->msw.u.bits.ts
 
 #define IP cpu->ip
 
-#define AL cpu->registers[REG_AL].l   // accum low byte 8bit register
-#define AH cpu->registers[REG_AL].h   // accum high byte 8bit register
-#define AX cpu->registers[REG_AX].r16 // accum 16bit register
+#define AL cpu->registers[REG_AL].u.r8.l   /* accum low byte 8bit register */
+#define AH cpu->registers[REG_AL].u.r8.h   /* accum high byte 8bit register */
+#define AX cpu->registers[REG_AX].u.r16    /* accum 16bit register */
 
-#define CL cpu->registers[REG_CL].l   // count low byte 8bit register
-#define CH cpu->registers[REG_CL].h   // count high byte 8bit register
-#define CX cpu->registers[REG_CX].r16 // count 16bit register
+#define CL cpu->registers[REG_CL].u.r8.l   /* count low byte 8bit register */
+#define CH cpu->registers[REG_CL].u.r8.h   /* count high byte 8bit register */
+#define CX cpu->registers[REG_CX].u.r16    /* count 16bit register */
 
-#define DL cpu->registers[REG_DL].l   // data low byte 8bit register
-#define DH cpu->registers[REG_DL].h   // data high byte 8bit register
-#define DX cpu->registers[REG_DX].r16 // data 16bit register
+#define DL cpu->registers[REG_DL].u.r8.l   /* data low byte 8bit register */
+#define DH cpu->registers[REG_DL].u.r8.h   /* data high byte 8bit register */
+#define DX cpu->registers[REG_DX].u.r16    /* data 16bit register */
 
-#define BL cpu->registers[REG_BL].l   // base low byte 8bit register
-#define BH cpu->registers[REG_BL].h   // base high byte 8bit register
-#define BX cpu->registers[REG_BX].r16 // base 16bit register
+#define BL cpu->registers[REG_BL].u.r8.l   /* base low byte 8bit register */
+#define BH cpu->registers[REG_BL].u.r8.h   /* base high byte 8bit register */
+#define BX cpu->registers[REG_BX].u.r16    /* base 16bit register */
 
-#define SP cpu->registers[REG_SP].r16 // stack pointer 16bit register
-#define BP cpu->registers[REG_BP].r16 // base pointer 16bit register
-#define SI cpu->registers[REG_SI].r16 // src index 16bit register
-#define DI cpu->registers[REG_DI].r16 // dest index 16bit register
+#define SP cpu->registers[REG_SP].u.r16    /* stack pointer 16bit register */
+#define BP cpu->registers[REG_BP].u.r16    /* base pointer 16bit register */
+#define SI cpu->registers[REG_SI].u.r16    /* src index 16bit register */
+#define DI cpu->registers[REG_DI].u.r16    /* dest index 16bit register */
 
-#define ES cpu->segments[SEG_ES] // extra segment register
-#define CS cpu->segments[SEG_CS] // code segment register
-#define SS cpu->segments[SEG_SS] // stack segment register
-#define DS cpu->segments[SEG_DS] // data segment register
+#define ES cpu->segments[SEG_ES].selector  /* extra segment register */
+#define CS cpu->segments[SEG_CS].selector  /* code segment register */
+#define SS cpu->segments[SEG_SS].selector  /* stack segment register */
+#define DS cpu->segments[SEG_DS].selector  /* data segment register */
 
- // byte/word operation. 0 = byte; 1 = word
+#define ES_CACHE cpu->segments[SEG_ES].descriptor  /* extra segment register */
+#define CS_CACHE cpu->segments[SEG_CS].descriptor  /* code segment register */
+#define SS_CACHE cpu->segments[SEG_SS].descriptor  /* stack segment register */
+#define DS_CACHE cpu->segments[SEG_DS].descriptor  /* data segment register */
+
+#define LDT       cpu->ldt.selector
+#define LDT_CACHE cpu->ldt.descriptor
+
+#define IDTR      cpu->idtr
+#define GDTR      cpu->gdtr
+
+#define TR        cpu->tr
+#define TSS       cpu->tss
+
+ /* byte/word operation. 0 = byte; 1 = word */
 #define W (cpu->opcode & 0x1)
 
-// byte/word operation. 0 = byte; 1 = word
+/* byte/word operation. 0 = byte; 1 = word */
 #define WREG (cpu->opcode & 0x8) 
 
-// byte/word operation. b00 = byte; b01 = word; b11 = byte sign extended to word
-#define SW (cpu->opcode & 0x3)
+/* sign extend. 0 = word; 1 = byte sign extended to word */
+#define S (cpu->opcode & 0x2)
 
-// segment register. es=b00; cs=b01; ss=b10; ds=b11
+/* segment register. es=b00; cs=b01; ss=b10; ds=b11 */
 #define SR ((cpu->opcode >> 0x3) & 0x3)
 
-// 0 = (count = 1); 1 = (count = CL)
+/* 0 = (count = 1); 1 = (count = CL) */
 #define VW (cpu->opcode & 0x2)
 
-// register direction (reg <- r/m) or (r/m <- reg)
+/* register direction (reg <- r/m) or (r/m <- reg) */
 #define D (cpu->opcode & 0x2) 
 
  /* Jump condition */
@@ -94,7 +112,7 @@
 #define GET_SEG_OVERRIDE(seg) ((cpu->segment_prefix != 0xFF) ? cpu->segment_prefix : seg)
 
 /* Get default or override segment register */
-#define SEG_DEFAULT_OR_OVERRIDE(seg) (cpu->segments[GET_SEG_OVERRIDE(seg)])
+#define SEG_DEFAULT_OR_OVERRIDE(seg) (cpu->segments[GET_SEG_OVERRIDE(seg)].selector)
 
 /* Read byte from IO port */
 #define READ_IO_BYTE(port) cpu->funcs.read_io_byte(port)
@@ -102,22 +120,15 @@
 /* Write byte to IO port */
 #define WRITE_IO_BYTE(port,value) cpu->funcs.write_io_byte(port, value)
 
-/* Get ptr to 16bit segment */
-#define GET_SEG(seg) (&cpu->segments[seg & 3])
+#define INT_DBZ      0 /* ITC 0 */
+#define INT_TRAP     1 /* ITC 1 */
+#define INT_NMI      2 /* ITC 2 */
+#define INT_3        3 /* ITC 3 */
+#define INT_OVERFLOW 4 /* ITC 4 */
+#define INT_BOUNDS   5 /* ITC 5 */
 
-#define TRANSFERS(x) cpu->cycles += (x * 4)
-#define TRANSFERS_RM(reg_transfer, mem_transfer) cpu->cycles += ((cpu->modrm.mod == 0b11 ? reg_transfer : mem_transfer) * 4)
-#define TRANSFERS_RM_D(reg_transfer, mr_transfer, rm_transfer) cpu->cycles += ((cpu->modrm.mod == 0b11 ? reg_transfer : !D ? mr_transfer : rm_transfer) * 4)
-
-#define CYCLES(x) cpu->cycles += x
-#define CYCLES_RM(reg_cyc, mem_cyc) cpu->cycles += (cpu->modrm.mod == 0b11 ? reg_cyc : mem_cyc)
-#define CYCLES_RM_D(reg_cyc, mr_cyc, rm_cyc) cpu->cycles += (cpu->modrm.mod == 0b11 ? reg_cyc : !D ? mr_cyc : rm_cyc)
-
-#define INT_DBZ      0 // ITC 0
-#define INT_TRAP     1 // ITC 1
-#define INT_NMI      2 // ITC 2
-#define INT_3        3 // ITC 3
-#define INT_OVERFLOW 4 // ITC 4
+#define EXCEPTION_UD  6 /* #UD */
+#define EXCEPTION_GP 13 /* #GP */
 
 /* Internal flag F1. Signals that a rep prefix is in use for this decode cycle */
 #define F1  (cpu->internal_flags & INTERNAL_FLAG_F1)
@@ -149,100 +160,556 @@ typedef struct {
 	} u;
 } OPERAND16;
 
-static uint8_t op8_read(I8086* cpu, OPERAND8 op8);
-static void op8_write(I8086* cpu, OPERAND8 op8, uint8_t v);
+void i80286_exception(I80286* cpu, uint8_t exception);
 
-static uint16_t op16_read(I8086* cpu, OPERAND16 op16);
-static void op16_write(I8086* cpu, OPERAND16 op16, uint16_t v);
+static int read_byte_linear(I80286* cpu, uint24_t physical_address, uint8_t* value) {
+	*value = cpu->funcs.read_mem_byte(physical_address);
+	return 1;
+}
+static int write_byte_linear(I80286* cpu, uint24_t physical_address, uint8_t value) {
+	cpu->funcs.write_mem_byte(physical_address, value);
+	return 1;
+}
 
-static uint8_t read_byte(I8086* cpu, uint16_t segment, uint16_t offset) {
-	return cpu->funcs.read_mem_byte(i8086_get_physical_address(segment, offset));
+static int read_byte(I80286* cpu, uint16_t segment, uint16_t offset, uint8_t* value) {
+	if (offset > 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+	*value = cpu->funcs.read_mem_byte(i80286_get_physical_address(segment, offset));
+	return 1;
 }
-static void write_byte(I8086* cpu, uint16_t segment, uint16_t offset, uint8_t value) {
-	cpu->funcs.write_mem_byte(i8086_get_physical_address(segment, offset), value);
+static int write_byte(I80286* cpu, uint16_t segment, uint16_t offset, uint8_t value) {
+	if (offset > 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(i80286_get_physical_address(segment, offset), value);
+	return 1;
 }
-static uint8_t fetch_byte(I8086* cpu) {
-	uint8_t v = read_byte(cpu, CS, IP);
+static int fetch_byte(I80286* cpu, uint8_t* value) {
+	read_byte(cpu, CS, IP, value);
 	IP += 1;
 	cpu->instruction_len += 1;
-	return v;
+	if (cpu->instruction_len > 10) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+	return 1;
 }
 
-static uint16_t read_word(I8086* cpu, uint16_t segment, uint16_t offset) {
-	return (((uint16_t)cpu->funcs.read_mem_byte(i8086_get_physical_address(segment, offset + 1)) << 8) | cpu->funcs.read_mem_byte(i8086_get_physical_address(segment, offset)));
+static int read_word_linear(I80286* cpu, uint24_t physical_address, uint16_t* value) {
+	*value = (((uint16_t)cpu->funcs.read_mem_byte(physical_address + 1) << 8) | cpu->funcs.read_mem_byte(physical_address));
+	return 1;
 }
-static void write_word(I8086* cpu, uint16_t segment, uint16_t offset, uint16_t value) {
-	cpu->funcs.write_mem_byte(i8086_get_physical_address(segment, offset), value & 0xFF);
-	cpu->funcs.write_mem_byte(i8086_get_physical_address(segment, offset + 1), (value >> 8) & 0xFF);
+static int write_word_linear(I80286* cpu, uint24_t physical_address, uint16_t value) {
+	cpu->funcs.write_mem_byte(physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(physical_address + 1, (value >> 8) & 0xFF);
+	return 1;
 }
-static uint16_t fetch_word(I8086* cpu) {
-	uint16_t v = read_word(cpu, CS, IP);
+
+static int read_word(I80286* cpu, uint16_t segment, uint16_t offset, uint16_t* value) {
+	if (offset >= 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+	*value = (((uint16_t)cpu->funcs.read_mem_byte(i80286_get_physical_address(segment, offset + 1)) << 8) | cpu->funcs.read_mem_byte(i80286_get_physical_address(segment, offset)));
+	return 1;
+}
+static int write_word(I80286* cpu, uint16_t segment, uint16_t offset, uint16_t value) {
+	if (offset >= 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(i80286_get_physical_address(segment, offset), value & 0xFF);
+	cpu->funcs.write_mem_byte(i80286_get_physical_address(segment, offset + 1), (value >> 8) & 0xFF);
+	return 1;
+}
+static int fetch_word(I80286* cpu, uint16_t* value) {
+	read_word(cpu, CS, IP, value);
 	IP += 2;
 	cpu->instruction_len += 2;
-	return v;
+	if (cpu->instruction_len > 10) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+	return 1;
 }
 
-static void push_op8(I8086* cpu, OPERAND8 op8) {
-	SP -= 2;
-	uint8_t tmp = op8_read(cpu, op8);
-	write_byte(cpu, SS, SP, tmp);
+static uint8_t reg8_read(I80286* cpu, uint8_t reg) {
+	if (reg & 0x4) {
+		return cpu->registers[reg & 0x3].u.r8.h;
+	}
+	else {
+		return cpu->registers[reg & 0x3].u.r8.l;
+	}
 }
-static void push_byte(I8086* cpu, uint8_t value) {
-	SP -= 2;
-	write_byte(cpu, SS, SP, value);
-}
-
-static void push_op16(I8086* cpu, OPERAND16 op16) {
-	SP -= 2;
-	uint16_t tmp = op16_read(cpu, op16);
-	write_word(cpu, SS, SP, tmp);
-}
-static void push_word(I8086* cpu, uint16_t value) {
-	SP -= 2;
-	write_word(cpu, SS, SP, value);
+static void reg8_write(I80286* cpu, uint8_t reg, uint8_t v) {
+	if (reg & 0x4) {
+		cpu->registers[reg & 0x3].u.r8.h = v;
+	}
+	else {
+		cpu->registers[reg & 0x3].u.r8.l = v;
+	}
 }
 
-static void pop_op16(I8086* cpu, OPERAND16 op16) {
-	uint16_t tmp = read_word(cpu, SS, SP);
+static uint16_t reg16_read(I80286* cpu, uint8_t reg) {
+	return cpu->registers[reg & 0x7].u.r16;
+}
+static void reg16_write(I80286* cpu, uint8_t reg, uint16_t v) {
+	cpu->registers[reg & 0x7].u.r16 = v;
+}
+
+/* Mod R/M */
+static uint16_t modrm_get_base_offset(I80286* cpu) {
+	switch (cpu->modrm.u.bits.rm) {
+		case 0b000: /* base rel indexed - BX + SI */
+			return (BX + SI);
+		case 0b001: /* base rel indexed - BX + DI */
+			return (BX + DI);
+		case 0b010: /* base rel indexed stack - BP + SI */
+			return (BP + SI);
+		case 0b011: /* base rel indexed stack - BP + DI */
+			return (BP + DI);
+		case 0b100: /* implied SI */
+			return SI;
+		case 0b101: /* implied DI */
+			return DI;
+		case 0b110: /* implied BP */
+			return BP;
+		case 0b111: /* implied BX */
+			return BX;
+	}
+	return 0;
+}
+static uint16_t modrm_get_segment(I80286* cpu) {
+	if (cpu->segment_prefix != 0xFF) {
+		return cpu->segments[cpu->segment_prefix & 0x3].selector; /* CS/DS/ES/SS override */
+	}
+	else {
+		/* mod = 00 special case for r/m=110 -> [disp16] uses DS */
+		if (cpu->modrm.u.bits.mod == 0b00 && cpu->modrm.u.bits.rm == 0b110) {
+			return cpu->segments[SEG_DS].selector;
+		}
+		else {
+			switch (cpu->modrm.u.bits.rm) {
+				case 0b010: /* [BP+SI] */
+				case 0b011: /* [BP+DI] */
+				case 0b110: /* [BP] (mod != 00) */
+					return cpu->segments[SEG_SS].selector; /* defaults to SS */
+					break;
+				default:
+					return cpu->segments[SEG_DS].selector; /* everything else defaults to DS */
+					break;
+			}
+		}
+	}
+}
+static int modrm_get_offset(I80286* cpu, uint16_t* offset) {
+	switch (cpu->modrm.u.bits.mod) {
+		case 0b00:
+			if (cpu->modrm.u.bits.rm == 0b110) {
+				return fetch_word(cpu, offset);
+			}
+			else {
+				*offset = modrm_get_base_offset(cpu);
+				return 1;
+			}
+
+		case 0b01: {
+			uint8_t disp8 = 0;
+			if (!fetch_byte(cpu, &disp8)) {
+				return 0;
+			}
+			*offset = (modrm_get_base_offset(cpu) + (int8_t)disp8) & 0xFFFF;
+			return 1;
+		}
+
+		case 0b10: {
+			uint16_t disp16 = 0;
+			if (!fetch_word(cpu, &disp16)) {
+				return 0;
+			}
+			*offset = (modrm_get_base_offset(cpu) + (int16_t)disp16) & 0xFFFF;
+			return 1;
+		}
+
+		/* case 0b11: register mode never calls this */
+		case 0b11:
+		default:
+			*offset = 0;
+			return 1;
+	}
+}
+
+static int modrm_get_rm8(I80286* cpu, OPERAND8* op8) {
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		op8->is_reg = 1;
+		op8->u.reg_index = cpu->modrm.u.bits.rm;
+		return 1;
+	}
+	else {
+		op8->is_reg = 0;
+		op8->u.mem.segment = modrm_get_segment(cpu);
+		return modrm_get_offset(cpu, &op8->u.mem.offset);
+	}
+}
+
+static int  modrm_read_rm8(I80286* cpu, OPERAND8 op8, uint8_t* value) {
+	if (op8.is_reg) {
+		*value = reg8_read(cpu, op8.u.reg_index);
+		return 1;
+	}
+	else {
+		return read_byte(cpu, op8.u.mem.segment, op8.u.mem.offset, value);
+	}
+}
+static int  modrm_write_rm8(I80286* cpu, OPERAND8 op8, uint8_t value) {
+	if (op8.is_reg) {
+		reg8_write(cpu, op8.u.reg_index, value);
+		return 1;
+	}
+	else {
+		return write_byte(cpu, op8.u.mem.segment, op8.u.mem.offset, value);
+	}
+}
+
+static uint8_t modrm_read_reg8(I80286* cpu) {
+	return reg8_read(cpu, cpu->modrm.u.bits.reg);
+}
+static void modrm_write_reg8(I80286* cpu, uint8_t value) {
+	reg8_write(cpu, cpu->modrm.u.bits.reg, value);
+}
+
+static int modrm_get_rm16(I80286* cpu, OPERAND16* op16) {
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		op16->is_reg = 1;
+		op16->u.reg_index = cpu->modrm.u.bits.rm;
+		return 1;
+	}
+	else {
+		op16->is_reg = 0;
+		op16->u.mem.segment = modrm_get_segment(cpu);
+		return modrm_get_offset(cpu, &op16->u.mem.offset);
+	}
+}
+
+static int modrm_read_rm16(I80286* cpu, OPERAND16 op16, uint16_t* value) {
+	if (op16.is_reg) {
+		*value = reg16_read(cpu, op16.u.reg_index);
+		return 1;
+	}
+	else {
+		return read_word(cpu, op16.u.mem.segment, op16.u.mem.offset, value);
+	}
+}
+static int modrm_write_rm16(I80286* cpu, OPERAND16 op16, uint16_t value) {
+	if (op16.is_reg) {
+		reg16_write(cpu, op16.u.reg_index, value);
+		return 1;
+	}
+	else {
+		return write_word(cpu, op16.u.mem.segment, op16.u.mem.offset, value);
+	}
+}
+
+static uint16_t modrm_read_reg16(I80286* cpu) {
+	return reg16_read(cpu, cpu->modrm.u.bits.reg);
+}
+static void modrm_write_reg16(I80286* cpu, uint16_t value) {
+	reg16_write(cpu, cpu->modrm.u.bits.reg, value);
+}
+
+static int fetch_modrm(I80286* cpu) {
+	cpu->modrm.u.byte = 0;
+	if (!fetch_byte(cpu, &cpu->modrm.u.byte)) {
+		return 0;
+	}
+	return 1;
+}
+
+static int exec_bin_op8(I80286* cpu, void (*op)(I80286*, uint8_t*, uint8_t)) {
+	OPERAND8 rm = { 0 };
+	uint8_t reg = 0;
+	uint8_t tmp = 0;
+
+	if (!modrm_get_rm8(cpu, &rm)) {
+		return 0;
+	}
+
+	reg = modrm_read_reg8(cpu);
+	
+	if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		return 0;
+	}
+	
+	if (D) {
+		op(cpu, &reg, tmp);
+		modrm_write_reg8(cpu, reg);
+	}
+	else {
+		op(cpu, &tmp, reg);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+	return 1;
+}
+static int exec_bin_op8_ro(I80286* cpu, void (*op)(I80286*, uint8_t, uint8_t)) {
+	OPERAND8 rm = { 0 };
+	uint8_t reg = 0;
+	uint8_t tmp = 0;
+
+	if (!modrm_get_rm8(cpu, &rm)) {
+		return 0;
+	}
+
+	reg = modrm_read_reg8(cpu);
+	
+	if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		return 0;
+	}
+	
+	if (D) {
+		op(cpu, reg, tmp);
+	}
+	else {
+		op(cpu, tmp, reg);
+	}
+	return 1;
+}
+
+static int exec_bin_rm_imm_op8(I80286* cpu, void (*op)(I80286*, uint8_t*, uint8_t)) {
+	OPERAND8 rm = { 0 };
+	uint8_t imm = 0;
+	uint8_t tmp = 0;
+
+	if (!modrm_get_rm8(cpu, &rm)) {
+		return 0;
+	}
+
+	if (!fetch_byte(cpu, &imm)) {
+		return 0;
+	}
+
+	if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		return 0;
+	}
+
+	op(cpu, &tmp, imm);
+	modrm_write_rm8(cpu, rm, tmp);
+	return 1;
+}
+static int exec_bin_rm_imm_op8_ro(I80286* cpu, void (*op)(I80286*, uint8_t, uint8_t)) {
+	OPERAND8 rm = { 0 };
+	uint8_t imm = 0;
+	uint8_t tmp = 0;
+	
+	if (!modrm_get_rm8(cpu, &rm)) {
+		return 0;
+	}
+
+	if (!fetch_byte(cpu, &imm)) {
+		return 0;
+	}
+
+	if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		return 0;
+	}
+
+	op(cpu, tmp, imm);
+	return 1;
+}
+
+static int exec_bin_op16(I80286* cpu, void (*op)(I80286*, uint16_t*, uint16_t)) {
+	OPERAND16 rm = { 0 };
+	uint16_t reg = 0;
+	uint16_t tmp = 0;
+
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return 0;
+	}
+
+	reg = modrm_read_reg16(cpu);
+
+	if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		return 0;
+	}
+
+	if (D) {
+		op(cpu, &reg, tmp);
+		modrm_write_reg16(cpu, reg);
+	}
+	else {
+		op(cpu, &tmp, reg);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	return 1;
+}
+static int exec_bin_op16_ro(I80286* cpu, void (*op)(I80286*, uint16_t, uint16_t)) {
+	OPERAND16 rm = { 0 };
+	uint16_t reg = 0;
+	uint16_t tmp = 0;
+
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return 0;
+	}
+
+	reg = modrm_read_reg16(cpu);
+
+	if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		return 0;
+	}
+	
+	if (D) {
+		op(cpu, reg, tmp);
+	}
+	else {
+		op(cpu, tmp, reg);
+	}
+	return 1;
+}
+
+static int exec_bin_rm_imm_op16(I80286* cpu, void (*op)(I80286*, uint16_t*, uint16_t)) {
+	OPERAND16 rm = { 0 };
+	uint16_t imm = 0;
+	uint16_t tmp = 0;
+		
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return 0;
+	}
+
+	if (!fetch_word(cpu, &imm)) {
+		return 0;
+	}
+
+	if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		return 0;
+	}
+
+	op(cpu, &tmp, imm);
+	modrm_write_rm16(cpu, rm, tmp);
+	return 1;
+}
+static int exec_bin_rm_imm_op16_ro(I80286* cpu, void (*op)(I80286*, uint16_t, uint16_t)) {
+	OPERAND16 rm = { 0 };
+	uint16_t imm = 0;
+	uint16_t tmp = 0;
+
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return 0;
+	}
+
+	if (!fetch_word(cpu, &imm)) {
+		return 0;
+	}
+
+	if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		return 0;
+	}
+
+	op(cpu, tmp, imm);
+	return 1;
+}
+
+static int exec_bin_rm_imm8_op16(I80286* cpu, void (*op)(I80286*, uint16_t*, uint16_t)) {
+	OPERAND16 rm = { 0 };
+	uint8_t imm = 0;
+	uint16_t tmp = 0;
+	uint16_t se = 0;
+
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return 0;
+	}
+
+	if (!fetch_byte(cpu, &imm)) {
+		return 0;
+	}
+
+	if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		return 0;
+	}
+
+	se = sign_extend8_16(imm);
+	op(cpu, &tmp, se);
+	modrm_write_rm16(cpu, rm, tmp);
+	return 1;
+}
+static int exec_bin_rm_imm8_op16_ro(I80286* cpu, void (*op)(I80286*, uint16_t, uint16_t)) {
+	OPERAND16 rm = { 0 };
+	uint8_t imm = 0;
+	uint16_t tmp = 0;
+	uint16_t se = 0;
+
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return 0;
+	}
+
+	if (!fetch_byte(cpu, &imm)) {
+		return 0;
+	}
+
+	if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		return 0;
+	}
+
+	se = sign_extend8_16(imm);
+	op(cpu, tmp, se);
+	return 1;
+}
+
+static int push_op16(I80286* cpu, OPERAND16 op16) {
+	uint16_t tmp = 0;
+	if(!modrm_read_rm16(cpu, op16, &tmp)) {
+		return 0;
+	}
+	SP -= 2;
+	return write_word(cpu, SS, SP, tmp);
+}
+static int push_word(I80286* cpu, uint16_t value) {
+	SP -= 2;
+	return write_word(cpu, SS, SP, value);
+}
+
+static int pop_op16(I80286* cpu, OPERAND16 op16) {
+	uint16_t tmp = 0;
+	if (!read_word(cpu, SS, SP, &tmp)) {
+		return 0;
+	}
 	SP += 2;
-	op16_write(cpu, op16, tmp);
+	return modrm_write_rm16(cpu, op16, tmp);
 }
-static void pop_word(I8086* cpu, uint16_t* value) {
-	*value = read_word(cpu, SS, SP);
+static int pop_word(I80286* cpu, uint16_t* value) {
+	if (!read_word(cpu, SS, SP, value)) {
+		return 0;		
+	}
 	SP += 2;
+	return 1;
 }
 
-void i8086_intr(I8086* cpu, uint8_t type) {
+void i80286_intr(I80286* cpu, uint8_t type) {
 	if (!INTR) {
 		INTR = 1;
 		cpu->intr_type = type;
 	}
 }
-void i8086_nmi(I8086* cpu) {
+void i80286_nmi(I80286* cpu) {
 	NMI = 1;
 }
-void i8086_int(I8086* cpu, uint8_t type) {
-
-#ifdef I8086_ENABLE_INTERRUPT_HOOKS
-	I8086_INT_CB hook = i8086_find_interrupt_cb(cpu, type);
-	if (hook != NULL) {
-		if (hook(cpu)){
-			return; // Interrupt was handled by the hook
-		}
-	}
-#endif
-
+void i80286_int(I80286* cpu, uint8_t type) {
 	push_word(cpu, PSW);
 	push_word(cpu, CS);
 	push_word(cpu, IP);
 	uint16_t offset = type * 4;
-	IP = read_word(cpu, 0x0000, offset);
-	CS = read_word(cpu, 0x0000, offset + 2);
+
+	read_word(cpu, 0x0000, offset, &IP);
+	read_word(cpu, 0x0000, offset + 2, &CS);
 	IF = 0;
 	TF = 0;
 }
-static void i8086_check_interrupts(I8086* cpu) {
-		
+void i80286_exception(I80286* cpu, uint8_t exception) {
+	IP -= cpu->instruction_len;
+	i80286_int(cpu, exception);
+}
+static void i80286_check_interrupts(I80286* cpu) {
 	if (cpu->int_delay == 1) {
 		cpu->int_delay = 0;
 		return;
@@ -251,23 +718,20 @@ static void i8086_check_interrupts(I8086* cpu) {
 	if (NMI) {
 		/* Non-Maskable int */
 		NMI = 0;
-		i8086_int(cpu, INT_NMI);
-		TRANSFERS(5);
-		CYCLES(50);
+		i80286_int(cpu, INT_NMI);
+		cpu->halt = 0; /* stop halting */
 	}
 	else if (INTR && cpu->int_latch) {
 		/* Hardware int; INTR is masked by IF */
 		INTR = 0;
-		i8086_int(cpu, cpu->intr_type);
-		TRANSFERS(7);
-		CYCLES(61);
+		i80286_int(cpu, cpu->intr_type);
+		cpu->halt = 0; /* stop halting */
 	}
 
 	if (cpu->tf_latch) {
 		/* Trap int */
-		i8086_int(cpu, INT_TRAP);
-		TRANSFERS(5);
-		CYCLES(50);
+		i80286_int(cpu, INT_TRAP); 
+		cpu->halt = 0; /* stop halting */
 	}
 
 	/* latch int flag for next cycle */
@@ -277,776 +741,471 @@ static void i8086_check_interrupts(I8086* cpu) {
 	cpu->tf_latch = TF;
 }
 
-static uint8_t reg8_read(I8086* cpu, uint8_t reg) {
-	if (reg & 0x4) {
-		return cpu->registers[reg & 0x3].h;
-	}
-	else {
-		return cpu->registers[reg & 0x3].l;
-	}
-}
-static void reg8_write(I8086* cpu, uint8_t reg, uint8_t v) {
-	if (reg & 0x4) {
-		cpu->registers[reg & 0x3].h = v;
-	}
-	else {
-		cpu->registers[reg & 0x3].l = v;
+static void i80286_check_halt(I80286* cpu) {
+	if (cpu->halt) {
+		IP -= cpu->instruction_len; /* continue halting */
 	}
 }
 
-static uint16_t reg16_read(I8086* cpu, uint8_t reg) {
-	return cpu->registers[reg & 0x7].r16;
-}
-static void reg16_write(I8086* cpu, uint8_t reg, uint16_t v) {
-	cpu->registers[reg & 0x7].r16 = v;
-}
-
-/* Mod R/M */
-
-/* Use the mod r/m byte to calculate a 16bit indirect address eg (BX+SI) */
-static uint16_t modrm_get_base_offset(I8086* cpu) {
-	switch (cpu->modrm.rm) {
-		case 0b000: // base rel indexed - BX + SI
-			return (BX + SI);
-		case 0b001: // base rel indexed - BX + DI
-			return (BX + DI);
-		case 0b010: // base rel indexed stack - BP + SI
-			return (BP + SI);
-		case 0b011: // base rel indexed stack - BP + DI
-			return (BP + DI);
-		case 0b100: // implied SI
-			return SI;
-		case 0b101: // implied DI
-			return DI;
-		case 0b110: // implied BP
-			return BP;
-		case 0b111: // implied BX
-			return BX;
+static int modrm_get_seg_index(I80286* cpu, uint8_t* sr) {
+	if (cpu->modrm.u.bits.reg > 3) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return 0; /* error - 286 doesnt wrap segment registers like the 8086 */
 	}
-	return 0;
-}
-
-/* Use the mod r/m byte to calculate the selected segment */
-static uint16_t modrm_get_segment(I8086* cpu) {
-	if (cpu->segment_prefix != 0xFF) {
-		cpu->ea_segment = cpu->segments[cpu->segment_prefix & 0x3]; // CS/DS/ES/SS override
-	}
-	else {
-		// mod = 00 special case for r/m=110 -> [disp16] uses DS
-		if (cpu->modrm.mod == 0b00 && cpu->modrm.rm == 0b110) {
-			cpu->ea_segment = cpu->segments[SEG_DS];
-		}
-		else {
-			switch (cpu->modrm.rm) {
-				case 0b010: // [BP+SI]
-				case 0b011: // [BP+DI]
-				case 0b110: // [BP] (mod != 00)
-					cpu->ea_segment = cpu->segments[SEG_SS]; // defaults to SS
-					break;
-				default:
-					cpu->ea_segment = cpu->segments[SEG_DS]; // everything else defaults to DS
-					break;
-			}
-		}
-	}
-	return cpu->ea_segment;
-}
-
-/* Use the mod r/m byte to calculate a 16-bit address (offset) */
-static uint16_t modrm_get_offset(I8086* cpu) {
-	switch (cpu->modrm.mod) {
-		case 0b00:
-			if (cpu->modrm.rm == 0b110) {
-				cpu->ea_offset = fetch_word(cpu);
-				CYCLES(6);
-			}
-			else {
-				cpu->ea_offset = modrm_get_base_offset(cpu);
-			}
-			break;
-
-		case 0b01: {
-			int8_t disp8 = (int8_t)fetch_byte(cpu);
-			cpu->ea_offset = (modrm_get_base_offset(cpu) + disp8) & 0xFFFF;
-			CYCLES(4);
-		} break;
-
-		case 0b10: {
-			int16_t disp16 = (int16_t)fetch_word(cpu);
-			cpu->ea_offset = (modrm_get_base_offset(cpu) + disp16) & 0xFFFF;
-			CYCLES(4);
-		} break;
-
-		// case 0b11: register mode never calls this
-	}
-	return cpu->ea_offset;
-}
-
-static OPERAND8 modrm_get_op8(I8086* cpu) {
-	OPERAND8 op8 = { 0 };
-	if (cpu->modrm.mod == 0b11) {
-		op8.is_reg = 1;
-		op8.u.reg_index = cpu->modrm.rm;
-	}
-	else {
-		op8.is_reg = 0;
-		op8.u.mem.segment = modrm_get_segment(cpu);
-		op8.u.mem.offset = modrm_get_offset(cpu);
-	}
-	return op8;
-}
-static OPERAND8 mem_get_op8(uint16_t segment, uint16_t offset) {
-	OPERAND8 op8 = { 0 };
-	op8.is_reg = 0;
-	op8.u.mem.segment = segment;
-	op8.u.mem.offset = offset;
-	return op8;
-}
-static uint8_t op8_read(I8086* cpu, OPERAND8 op8) {
-	if (op8.is_reg) {
-		return reg8_read(cpu, op8.u.reg_index);
-	}
-	else {
-		return read_byte(cpu, op8.u.mem.segment, op8.u.mem.offset);
-	}
-}
-static void op8_write(I8086* cpu, OPERAND8 op8, uint8_t v) {
-	if (op8.is_reg) {
-		reg8_write(cpu, op8.u.reg_index, v);
-	}
-	else {
-		write_byte(cpu, op8.u.mem.segment, op8.u.mem.offset, v);
-	}
-}
-
-// Resolve bit8 ModR/M + reg with D bit, then execute a binary op. with writeback
-// The op must be of the form: void op(I8086*, uint8_t*, uint8_t);
-static void exec_bin_op8(I8086* cpu, void (*op)(I8086*, uint8_t*, uint8_t)) {
-	OPERAND8 rm = modrm_get_op8(cpu);
-	uint8_t reg = reg8_read(cpu, cpu->modrm.reg);
-	uint8_t tmp = op8_read(cpu, rm);
-	if (D) {
-		op(cpu, &reg, tmp);
-		reg8_write(cpu, cpu->modrm.reg, reg);
-	}
-	else {
-		op(cpu, &tmp, reg);
-		op8_write(cpu, rm, tmp);
-	}
-}
-// Resolve bit8 ModR/M + reg with D bit, then execute a binary op. no writeback
-// The op must be of the form: void op(I8086*, uint8_t, uint8_t);
-static void exec_bin_op8_ro(I8086* cpu, void (*op)(I8086*, uint8_t, uint8_t)) {
-	OPERAND8 rm = modrm_get_op8(cpu);
-	uint8_t reg = reg8_read(cpu, cpu->modrm.reg);
-	uint8_t tmp = op8_read(cpu, rm);
-	if (D) {
-		op(cpu, reg, tmp);
-	}
-	else {
-		op(cpu, tmp, reg);
-	}
-}
-
-static OPERAND16 modrm_get_op16(I8086* cpu) {
-	OPERAND16 op16 = { 0 };
-	if (cpu->modrm.mod == 0b11) {
-		op16.is_reg = 1;
-		op16.u.reg_index = cpu->modrm.rm;
-	}
-	else {
-		op16.is_reg = 0;
-		op16.u.mem.segment = modrm_get_segment(cpu);
-		op16.u.mem.offset = modrm_get_offset(cpu);
-	}
-	return op16;
-}
-static OPERAND16 mem_get_op16(uint16_t segment, uint16_t offset) {
-	OPERAND16 op16 = { 0 };
-	op16.is_reg = 0;
-	op16.u.mem.segment = segment;
-	op16.u.mem.offset = offset;
-	return op16;
-}
-static uint16_t op16_read(I8086* cpu, OPERAND16 op16) {
-	if (op16.is_reg) {
-		return reg16_read(cpu, op16.u.reg_index);
-	}
-	else {
-		return read_word(cpu, op16.u.mem.segment, op16.u.mem.offset);
-	}
-}
-static void op16_write(I8086* cpu, OPERAND16 op16, uint16_t v) {
-	if (op16.is_reg) {
-		reg16_write(cpu, op16.u.reg_index, v);
-	}
-	else {
-		write_word(cpu, op16.u.mem.segment, op16.u.mem.offset, v);
-	}
-}
-
-// Resolve bit16 ModR/M + reg with D bit, then execute a binary op. with writeback
-// The op must be of the form: void op(I8086*, uint16_t*, uint16_t);
-static void exec_bin_op16(I8086* cpu, void (*op)(I8086*, uint16_t*, uint16_t)) {
-	OPERAND16 rm = modrm_get_op16(cpu);
-	uint16_t reg = reg16_read(cpu, cpu->modrm.reg);
-	uint16_t tmp = op16_read(cpu, rm);
-	if (D) {
-		op(cpu, &reg, tmp);
-		reg16_write(cpu, cpu->modrm.reg, reg);
-	}
-	else {
-		op(cpu, &tmp, reg);
-		op16_write(cpu, rm, tmp);
-	}
-}
-// Resolve bit16 ModR/M + reg with D bit, then execute a binary op. no writeback
-// The op must be of the form: void op(I8086*, uint16_t, uint16_t);
-static void exec_bin_op16_ro(I8086* cpu, void (*op)(I8086*, uint16_t, uint16_t)) {
-	OPERAND16 rm = modrm_get_op16(cpu);
-	uint16_t reg = reg16_read(cpu, cpu->modrm.reg);
-	uint16_t tmp = op16_read(cpu, rm);
-	if (D) {
-		op(cpu, reg, tmp);
-	}
-	else {
-		op(cpu, tmp, reg);
-	}
-}
-
-static void fetch_modrm(I8086* cpu) {
-	cpu->modrm.byte = fetch_byte(cpu);
+	*sr = cpu->modrm.u.bits.reg;
+	return 1;
 }
 
 /* Opcodes */
 
-static void add_rm_imm(I8086* cpu) {
+static void add_rm_imm(I80286* cpu) {
 	/* add r/m, imm (80/81/82/83, R/M reg = b000) b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_add16(cpu, &tmp, imm);
-			op16_write(cpu, rm, tmp);
+		if (S) {
+			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
+			exec_bin_rm_imm8_op16(cpu, i80286_alu_add16);
 		}
 		else {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_add16(cpu, &tmp, se);
-			op16_write(cpu, rm, tmp);
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16(cpu, i80286_alu_add16);
 		}
 	}
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_add8(cpu, &tmp, imm);
-		op8_write(cpu, rm, tmp);
+		exec_bin_rm_imm_op8(cpu, i80286_alu_add8);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
-static void add_rm_reg(I8086* cpu) {
+static void add_rm_reg(I80286* cpu) {
 	/* add r/m, reg (00/01/02/03) b000000DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16(cpu, alu_add16);
+		exec_bin_op16(cpu, i80286_alu_add16);
 	}
 	else {
-		exec_bin_op8(cpu, alu_add8);
+		exec_bin_op8(cpu, i80286_alu_add8);
 	}
-	TRANSFERS_RM_D(0, 2, 1);
-	CYCLES_RM_D(3, 16, 9);
 }
-static void add_accum_imm(I8086* cpu) {
+static void add_accum_imm(I80286* cpu) {
 	/* add AL/AX, imm (04/05) b0000010W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_add16(cpu, &AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_add16(cpu, &AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_add8(cpu, &AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_add8(cpu, &AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void or_rm_imm(I8086* cpu) {
+static void or_rm_imm(I80286* cpu) {
 	/* or r/m, imm (80/81/82/83, R/M reg = b001) b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_or16(cpu, &tmp, imm);
-			op16_write(cpu, rm, tmp);
+		if (S) {
+			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
+			exec_bin_rm_imm8_op16(cpu, i80286_alu_or16);
 		}
 		else {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_or16(cpu, &tmp, se);
-			op16_write(cpu, rm, tmp);
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16(cpu, i80286_alu_or16);
 		}
 	}
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_or8(cpu, &tmp, imm);
-		op8_write(cpu, rm, tmp);
+		exec_bin_rm_imm_op8(cpu, i80286_alu_or8);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
-static void or_rm_reg(I8086* cpu) {
+static void or_rm_reg(I80286* cpu) {
 	/* or r/m, reg (08/0A/09/0B) b000010DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16(cpu, alu_or16);
+		exec_bin_op16(cpu, i80286_alu_or16);
 	}
 	else {
-		exec_bin_op8(cpu, alu_or8);
+		exec_bin_op8(cpu, i80286_alu_or8);
 	}
-	TRANSFERS_RM_D(0, 2, 1);
-	CYCLES_RM_D(3, 16, 9);
 }
-static void or_accum_imm(I8086* cpu) {
+static void or_accum_imm(I80286* cpu) {
 	/* or AL/AX, imm (0C/0D) b0000110W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_or16(cpu, &AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_or16(cpu, &AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_or8(cpu, &AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_or8(cpu, &AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void adc_rm_imm(I8086* cpu) {
+static void adc_rm_imm(I80286* cpu) {
 	/* adc r/m, imm (80/81/82/83, R/M reg = b010) b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_adc16(cpu, &tmp, imm);
-			op16_write(cpu, rm, tmp);
+		if (S) {
+			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
+			exec_bin_rm_imm8_op16(cpu, i80286_alu_adc16);
 		}
 		else {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_adc16(cpu, &tmp, se);
-			op16_write(cpu, rm, tmp);
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16(cpu, i80286_alu_adc16);
 		}
 	}
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_adc8(cpu, &tmp, imm);
-		op8_write(cpu, rm, tmp);
+		exec_bin_rm_imm_op8(cpu, i80286_alu_adc8);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
-static void adc_rm_reg(I8086* cpu) {
+static void adc_rm_reg(I80286* cpu) {
 	/* adc r/m, reg (10/12/11/13) b000100DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16(cpu, alu_adc16);
+		exec_bin_op16(cpu, i80286_alu_adc16);
 	}
 	else {
-		exec_bin_op8(cpu, alu_adc8);
+		exec_bin_op8(cpu, i80286_alu_adc8);
 	}
-	TRANSFERS_RM_D(0, 2, 1);
-	CYCLES_RM_D(3, 16, 9);
 }
-static void adc_accum_imm(I8086* cpu) {
+static void adc_accum_imm(I80286* cpu) {
 	/* adc AL/AX, imm (14/15) b0001010W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_adc16(cpu, &AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_adc16(cpu, &AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_adc8(cpu, &AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_adc8(cpu, &AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void sbb_rm_imm(I8086* cpu) {
+static void sbb_rm_imm(I80286* cpu) {
 	/* sbb r/m, imm (80/81/82/83, R/M reg = b011)  b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_sbb16(cpu, &tmp, imm);
-			op16_write(cpu, rm, tmp);
-		}
-		else {
+		if (S) {
 			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_sbb16(cpu, &tmp, se);
-			op16_write(cpu, rm, tmp);
-		}
+			exec_bin_rm_imm8_op16(cpu, i80286_alu_sbb16);
+		} 
+		else {
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16(cpu, i80286_alu_sbb16);
+		} 
 	}
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_sbb8(cpu, &tmp, imm);
-		op8_write(cpu, rm, tmp);
+		exec_bin_rm_imm_op8(cpu, i80286_alu_sbb8);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
-static void sbb_rm_reg(I8086* cpu) {
+static void sbb_rm_reg(I80286* cpu) {
 	/* sbb r/m, reg (18/1A/19/1B) b000110DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16(cpu, alu_sbb16);
+		exec_bin_op16(cpu, i80286_alu_sbb16);
 	}
 	else {
-		exec_bin_op8(cpu, alu_sbb8);
+		exec_bin_op8(cpu, i80286_alu_sbb8);
 	}
-	TRANSFERS_RM_D(0, 2, 1);
-	CYCLES_RM_D(3, 16, 9);
 }
-static void sbb_accum_imm(I8086* cpu) {
+static void sbb_accum_imm(I80286* cpu) {
 	/* sbb AL/AX, imm (1C/1D) b0001110W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_sbb16(cpu, &AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_sbb16(cpu, &AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_sbb8(cpu, &AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_sbb8(cpu, &AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void and_rm_imm(I8086* cpu) {
+static void and_rm_imm(I80286* cpu) {
 	/* and r/m, imm (80/81/82/83, R/M reg = b100) b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_and16(cpu, &tmp, imm);
-			op16_write(cpu, rm, tmp);
+		if (S) {
+			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
+			exec_bin_rm_imm8_op16(cpu, i80286_alu_and16);
 		}
 		else {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_and16(cpu, &tmp, se);
-			op16_write(cpu, rm, tmp);
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16(cpu, i80286_alu_and16);
 		}
 	}
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_and8(cpu, &tmp, imm);
-		op8_write(cpu, rm, tmp);
+		exec_bin_rm_imm_op8(cpu, i80286_alu_and8);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
-static void and_rm_reg(I8086* cpu) {
+static void and_rm_reg(I80286* cpu) {
 	/* and r/m, reg (20/22/21/23) b001000DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16(cpu, alu_and16);
+		exec_bin_op16(cpu, i80286_alu_and16);
 	}
 	else {
-		exec_bin_op8(cpu, alu_and8);
+		exec_bin_op8(cpu, i80286_alu_and8);
 	}
-	TRANSFERS_RM_D(0, 2, 1);
-	CYCLES_RM_D(3, 16, 9);
 }
-static void and_accum_imm(I8086* cpu) {
+static void and_accum_imm(I80286* cpu) {
 	/* and AL/AX, imm (24/25) b0010010W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_and16(cpu, &AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_and16(cpu, &AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_and8(cpu, &AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_and8(cpu, &AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void sub_rm_imm(I8086* cpu) {
+static void sub_rm_imm(I80286* cpu) {
 	/* sub r/m, imm (80/81, R/M reg = b101) b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_sub16(cpu, &tmp, imm);
-			op16_write(cpu, rm, tmp);
+		if (S) {
+			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
+			exec_bin_rm_imm8_op16(cpu, i80286_alu_sub16);
 		}
 		else {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_sub16(cpu, &tmp, se);
-			op16_write(cpu, rm, tmp);
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16(cpu, i80286_alu_sub16);
 		}
 	}
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_sub8(cpu, &tmp, imm);
-		op8_write(cpu, rm, tmp);
+		exec_bin_rm_imm_op8(cpu, i80286_alu_sub8);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
-static void sub_rm_reg(I8086* cpu) {
+static void sub_rm_reg(I80286* cpu) {
 	/* sub r/m, reg (28/2A/29/2B) b001010DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16(cpu, alu_sub16);
+		exec_bin_op16(cpu, i80286_alu_sub16);
 	}
 	else {
-		exec_bin_op8(cpu, alu_sub8);
+		exec_bin_op8(cpu, i80286_alu_sub8);
 	}
-	TRANSFERS_RM_D(0, 2, 1);
-	CYCLES_RM_D(3, 16, 9);
 }
-static void sub_accum_imm(I8086* cpu) {
+static void sub_accum_imm(I80286* cpu) {
 	/* sub AL/AX, imm (2C/2D) b0010110W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_sub16(cpu, &AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_sub16(cpu, &AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_sub8(cpu, &AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_sub8(cpu, &AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void xor_rm_imm(I8086* cpu) {
+static void xor_rm_imm(I80286* cpu) {
 	/* xor r/m, imm (80/81/82/83, R/M reg = b110) b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_xor16(cpu, &tmp, imm);
-			op16_write(cpu, rm, tmp);
+		if (S) {
+			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
+			exec_bin_rm_imm8_op16(cpu, i80286_alu_xor16);
 		}
 		else {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_xor16(cpu, &tmp, se);
-			op16_write(cpu, rm, tmp);
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16(cpu, i80286_alu_xor16);
 		}
 	} 
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_xor8(cpu, &tmp, imm);
-		op8_write(cpu, rm, tmp);
+		exec_bin_rm_imm_op8(cpu, i80286_alu_xor8);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
-static void xor_rm_reg(I8086* cpu) {
+static void xor_rm_reg(I80286* cpu) {
 	/* xor r/m, reg (30/32/31/33) b001100DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16(cpu, alu_xor16);
+		exec_bin_op16(cpu, i80286_alu_xor16);
 	}
 	else {
-		exec_bin_op8(cpu, alu_xor8);
+		exec_bin_op8(cpu, i80286_alu_xor8);
 	}
-	TRANSFERS_RM_D(0, 2, 1);
-	CYCLES_RM_D(3, 16, 9);
 }
-static void xor_accum_imm(I8086* cpu) {
+static void xor_accum_imm(I80286* cpu) {
 	/* xor AL/AX, imm (34/35) b0011010W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_xor16(cpu, &AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_xor16(cpu, &AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_xor8(cpu, &AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_xor8(cpu, &AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void cmp_rm_imm(I8086* cpu) {
+static void cmp_rm_imm(I80286* cpu) {
 	/* cmp r/m, imm (80/81/82/83, R/M reg = b111)  b100000SW */
 	if (W) {
-		if (SW == 0b01) {
-			/* reg16, disp16 - 0x81 */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint16_t imm = fetch_word(cpu);
-			alu_cmp16(cpu, tmp, imm);
+		if (S) {
+			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
+			exec_bin_rm_imm8_op16_ro(cpu, i80286_alu_cmp16);
 		}
 		else {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			OPERAND16 rm = modrm_get_op16(cpu);
-			uint16_t tmp = op16_read(cpu, rm);
-			uint8_t imm = fetch_byte(cpu);
-			uint16_t se = sign_extend8_16(imm);
-			alu_cmp16(cpu, tmp, se);
+			/* reg16, disp16 - 0x81 */
+			exec_bin_rm_imm_op16_ro(cpu, i80286_alu_cmp16);
 		}
 	}
 	else {
 		/* reg8, disp8 - 0x80, 0x82 */
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_cmp8(cpu, tmp, imm);
+		exec_bin_rm_imm_op8_ro(cpu, i80286_alu_cmp8);
 	}
-	TRANSFERS_RM(0, 1);
-	CYCLES_RM(4, 10);
 }
-static void cmp_rm_reg(I8086* cpu) {
+static void cmp_rm_reg(I80286* cpu) {
 	/* cmp r/m, reg (38/39/3A/3B) b001110DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16_ro(cpu, alu_cmp16);
+		exec_bin_op16_ro(cpu, i80286_alu_cmp16);
 	}
 	else {
-		exec_bin_op8_ro(cpu, alu_cmp8);
+		exec_bin_op8_ro(cpu, i80286_alu_cmp8);
 	}
-	TRANSFERS_RM(0, 1);
-	CYCLES_RM(3, 9);
 }
-static void cmp_accum_imm(I8086* cpu) {
+static void cmp_accum_imm(I80286* cpu) {
 	/* cmp AL/AX, imm (3C/3D) b0011110W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_cmp16(cpu, AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_cmp16(cpu, AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_cmp8(cpu, AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_cmp8(cpu, AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void test_rm_imm(I8086* cpu) {
+static void test_rm_imm(I80286* cpu) {
 	/* test r/m, imm (F6/F7, R/M reg = b000) b1111011W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		uint16_t imm = fetch_word(cpu);
-		alu_test16(cpu, tmp, imm);
+		exec_bin_rm_imm_op16_ro(cpu, i80286_alu_test16);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		uint8_t imm = fetch_byte(cpu);
-		alu_test8(cpu, tmp, imm);
+		exec_bin_rm_imm_op8_ro(cpu, i80286_alu_test8);
 	}
-	CYCLES_RM(5, 11);
 }
-static void test_rm_reg(I8086* cpu) {
+static void test_rm_reg(I80286* cpu) {
 	/* test r/m, reg (84/85) b1000010W */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		exec_bin_op16_ro(cpu, alu_test16);
+		exec_bin_op16_ro(cpu, i80286_alu_test16);
 	}
 	else {
-		exec_bin_op8_ro(cpu, alu_test8);
+		exec_bin_op8_ro(cpu, i80286_alu_test8);
 	}
-	TRANSFERS_RM(0, 1);
-	CYCLES_RM(3, 9);
 }
-static void test_accum_imm(I8086* cpu) {
+static void test_accum_imm(I80286* cpu) {
 	/* test AL/AX, imm (A8/A9) b1010100W */
 	if (W) {
-		uint16_t imm = fetch_word(cpu);
-		alu_test16(cpu, AX, imm);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_test16(cpu, AX, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
-		alu_test8(cpu, AL, imm);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		i80286_alu_test8(cpu, AL, imm);
 	}
-	CYCLES(4);
 }
 
-static void daa(I8086* cpu) {
+static void daa(I80286* cpu) {
 	/* Decimal Adjust for Addition (27) b00100111 */
-	alu_daa(cpu, &AL);
-	CYCLES(4);
+	i80286_alu_daa(cpu, &AL);
 }
-static void das(I8086* cpu) {
+static void das(I80286* cpu) {
 	/* Decimal Adjust for Subtraction (2F) b00101111 */
-	alu_das(cpu, &AL);
-	CYCLES(4);
+	i80286_alu_das(cpu, &AL);
 }
-static void aaa(I8086* cpu) {
+static void aaa(I80286* cpu) {
 	/* ASCII Adjust for Addition (37) b00110111 */
-	alu_aaa(cpu, &AL, &AH);
-	CYCLES(4);
+	i80286_alu_aaa(cpu, &AL, &AH);
 }
-static void aas(I8086* cpu) {
+static void aas(I80286* cpu) {
 	/* ASCII Adjust for Subtraction (3F) b00111111 */
-	alu_aas(cpu, &AL, &AH);
-	CYCLES(4);
+	i80286_alu_aas(cpu, &AL, &AH);
 }
-static void aam(I8086* cpu) {
+static void aam(I80286* cpu) {
 	/* ASCII Adjust for Multiply (D4 0A) b11010100 00001010 */
-	uint8_t divisor = fetch_byte(cpu); // undocumented operand; normally 0x0A
-	alu_aam(cpu, &AL, &AH, divisor);
-	CYCLES(83);
+	uint8_t divisor = 0;
+	if (!fetch_byte(cpu, &divisor)) {
+		return;
+	} /* undocumented operand; normally 0x0A */
+	i80286_alu_aam(cpu, &AL, &AH, divisor);
 }
-static void aad(I8086* cpu) {
+static void aad(I80286* cpu) {
 	/* ASCII Adjust for Division (D5 0A) b11010101 00001010 */
-	uint8_t divisor = fetch_byte(cpu); // undocumented operand; normally 0x0A
-	alu_aad(cpu, &AL, &AH, divisor);
-	CYCLES(60);
+	uint8_t divisor = 0;
+	if (!fetch_byte(cpu, &divisor)) {
+		return;
+	} /* undocumented operand; normally 0x0A */
+	i80286_alu_aad(cpu, &AL, &AH, divisor);
 }
-static void salc(I8086* cpu) {
+static void salc(I80286* cpu) {
 	/* set carry in AL (D6) b11010110 undocumented opcode */
 	if (CF) {
 		AL = 0xFF;
@@ -1054,20 +1213,15 @@ static void salc(I8086* cpu) {
 	else {
 		AL = 0;
 	}
-	CYCLES(4); // ????
 }
 
-static void push_seg(I8086* cpu) {
+static void push_seg(I80286* cpu) {
 	/* Push seg16 (06/0E/16/1E) b000SR110 */
-	push_word(cpu, cpu->segments[SR]);
-	TRANSFERS(1);
-	CYCLES(10);
+	push_word(cpu, cpu->segments[SR].selector);
 }
-static void pop_seg(I8086* cpu) {
+static void pop_seg(I80286* cpu) {
 	/* Pop seg16 (07/0F/17/1F) b000SR111 */
-	pop_word(cpu, &cpu->segments[SR]);
-	TRANSFERS(1);
-	CYCLES(8);
+	pop_word(cpu, &cpu->segments[SR].selector);
 
 	/* Interrupts Following 'POP SS' May Corrupt Memory. On early Intel 8088 processors
 		(marked "INTEL '78" or "(C) 1978"), if an interrupt occurs immediately after a
@@ -1075,110 +1229,225 @@ static void pop_seg(I8086* cpu) {
 		resulting in memory corruption. */
 	cpu->int_delay = 1;
 }
-static void push_reg(I8086* cpu) {
+static void push_reg(I80286* cpu) {
 	/* Push reg16 (50-57) b01010REG */
 
-	/* NOTE: SP needs to be decemented prior to reading the register.
-		This is so when pushing SP the NEW SP is pushed. */
+	/* The 80286 PUSH SP instruction pushes
+	   the value of SP as it existed before the
+	   instruction. This differs from the 8086. */
 
+	uint16_t tmp = reg16_read(cpu, cpu->opcode);
 	SP -= 2;
-	write_word(cpu, SS, SP, reg16_read(cpu, cpu->opcode));
-	TRANSFERS(1);
-	CYCLES(11);
+	write_word(cpu, SS, SP, tmp);
 }
-static void pop_reg(I8086* cpu) {
+static void pop_reg(I80286* cpu) {
 	/* Pop reg16 (58-5F) b01011REG */
-
-	/* NOTE: SP needs to be incemented after reading the value from memory.
-		This is so when popping SP the OLD SP is popped. */
-
-	uint16_t tmp = read_word(cpu, SS, SP);
+	uint16_t tmp = 0;
+	read_word(cpu, SS, SP, &tmp);
 	SP += 2;
 	reg16_write(cpu, cpu->opcode, tmp);
-	TRANSFERS(1);
-	CYCLES(8);
 }
-static void push_rm(I8086* cpu) {
-	/* Push R/M (FE/FF, R/M reg = 110) b1111111W */
-
-	/* NOTE: SP needs to be decemented prior to reading the register.
-		This is so when pushing SP the NEW SP is pushed. */
-
-	if (W) {
-		OPERAND16 op16 = modrm_get_op16(cpu);
-		push_op16(cpu, op16);
+static void push_rm(I80286* cpu) {
+	/* Push R/M (FF, R/M reg = 110) b11111111 */
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
 	}
-	else {
-		/* Undocumented instruction; PUSH byte R/M. */
-		OPERAND8 op8 = modrm_get_op8(cpu);
-		push_op8(cpu, op8);
-	}
-	TRANSFERS(2);
-	CYCLES(16);
+	push_op16(cpu, rm);
 }
-static void pop_rm(I8086* cpu) {
+static void pop_rm(I80286* cpu) {
 	/* Pop R/M (8F) b10001111 */
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 
-	/* NOTE: SP needs to be incemented after reading the value from memory.
-		This is so when popping SP the OLD SP is popped. */
+	if (cpu->modrm.u.bits.reg != 0) {
+		i80286_exception(cpu, EXCEPTION_UD); /* reg bits are reserved */
+		return;
+	}
 
-	fetch_modrm(cpu);
-	OPERAND16 op16 = modrm_get_op16(cpu);
-	pop_op16(cpu, op16);
-
-	TRANSFERS(2);
-	CYCLES(17);
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+	pop_op16(cpu, rm);
 }
-static void pushf(I8086* cpu) {
+static void pushf(I80286* cpu) {
 	/* push psw (9C) b10011100 */
 	PSW &= 0xFFD7;
 	push_word(cpu, PSW);
-	TRANSFERS(1);
-	CYCLES(10);
 }
-static void popf(I8086* cpu) {
+static void popf(I80286* cpu) {
 	/* pop psw (9D) b10011101 */
 	uint16_t psw = 0;
 	pop_word(cpu, &psw);
-	PSW = (psw | 0xF002) & 0xFFD7;
-	TRANSFERS(1);
-	CYCLES(8);
+	PSW = (psw | 0x0002) & 0x0FD7;
+}
+static void pusha(I80286* cpu) {
+	/* push all (60) b01100000 */
+	uint16_t sp = SP;
+
+	if (((sp - 0x10) & 0xFFFF) == 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	push_word(cpu, AX);
+	push_word(cpu, CX);
+	push_word(cpu, DX);
+	push_word(cpu, BX);
+	push_word(cpu, sp); /* Push OLD sp */
+	push_word(cpu, BP);
+	push_word(cpu, SI);
+	push_word(cpu, DI);
+}
+static void popa(I80286* cpu) {
+	/* pop all (61) b01100001 */
+	uint16_t sp = SP;
+
+	if (sp == 0xFFFF || sp + 0xE == 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	pop_word(cpu, &DI);
+	pop_word(cpu, &SI);
+	pop_word(cpu, &BP);
+	pop_word(cpu, &sp); /* discard sp */
+	pop_word(cpu, &BX);
+	pop_word(cpu, &DX);
+	pop_word(cpu, &CX);
+	pop_word(cpu, &AX);
+}
+static void push_imm(I80286* cpu) {
+	/* Push IMM (68/6A) b011010S0 */
+
+	if (S) { /* sign extended to 16bit */
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		uint16_t se = sign_extend8_16(imm);
+		push_word(cpu, se);
+	}
+	else {
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		push_word(cpu, imm);
+	}
 }
 
-static void nop(I8086* cpu) {
+static void enter(I80286* cpu) {
+	/* enter procedure (C8) b11001000 */
+
+	uint16_t op1 = 0;
+	uint8_t op2 = 0;
+
+	if (!fetch_word(cpu, &op1)) {
+		return;
+	}
+
+	if (!fetch_byte(cpu, &op2)) {
+		return;
+	}
+
+	uint16_t bp = BP;
+	uint16_t sp = SP;
+
+	uint8_t level = op2 % 32;
+
+	sp -= 2;
+	if (!write_word(cpu, SS, sp, bp)) {
+		return;
+	}
+
+	uint16_t frame_ptr = sp;
+	uint16_t stack_word = 0;
+
+	if (level > 0) {
+		for (int i = 0; i < level - 1; ++i) {
+			bp -= 2;
+			if (!read_word(cpu, SS, bp, &stack_word)) {
+				return;
+			}
+
+			sp -= 2;
+			if (!write_word(cpu, SS, sp, stack_word)) {
+				return;
+			}
+		}
+
+		sp -= 2;
+		if (!write_word(cpu, SS, sp, frame_ptr)) {
+			return;
+		}
+	}
+
+	BP = frame_ptr;
+	SP = sp - op1;
+}
+static void leave(I80286* cpu) {
+	/* leave procedure (C9) b11001001 */
+
+	if (BP == 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	SP = BP;
+	pop_word(cpu, &BP);
+}
+
+static void nop(I80286* cpu) {
 	/* nop (90) b10010000 */
 	(void)cpu;
-	CYCLES(3);
 }
-static void xchg_accum_reg(I8086* cpu) {
+static void xchg_accum_reg(I80286* cpu) {
 	/* xchg AX, reg16 (91 - 97) b10010REG */	
 	uint16_t tmp = AX;
 	AX = reg16_read(cpu, cpu->opcode);
 	reg16_write(cpu, cpu->opcode, tmp);
-	CYCLES(3);
 }
-static void xchg_rm_reg(I8086* cpu) {
-	/* xchg R/M, reg16 (86/87) b1000011W */
-	fetch_modrm(cpu);
+static void xchg_rm_reg(I80286* cpu) {
+	/* xchg R/M, reg8/16 (86/87) b1000011W */
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t reg = reg16_read(cpu, cpu->modrm.reg);
-		uint16_t tmp = op16_read(cpu, rm);
-		op16_write(cpu, rm, reg);
-		reg16_write(cpu, cpu->modrm.reg, tmp);
+		OPERAND16 rm = { 0 };
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		uint16_t reg = modrm_read_reg16(cpu);
+		uint16_t tmp = 0;
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		if (!modrm_write_rm16(cpu, rm, reg)) {
+			return;
+		}
+		modrm_write_reg16(cpu, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t reg = reg8_read(cpu, cpu->modrm.reg);
-		uint8_t tmp = op8_read(cpu, rm);
-		op8_write(cpu, rm, reg);
-		reg8_write(cpu, cpu->modrm.reg, tmp);
+		OPERAND8 rm = { 0 };
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		uint8_t reg = modrm_read_reg8(cpu);
+		uint8_t tmp = 0;
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		if (!modrm_write_rm8(cpu, rm, reg)) {
+			return;
+		}
+		modrm_write_reg8(cpu, tmp);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(4, 17);
 }
 
-static void cbw(I8086* cpu) {
+static void cbw(I80286* cpu) {
 	/* Convert byte to word (98) b10011000 */
 	if (AL & 0x80) {
 		AH = 0xFF;
@@ -1186,9 +1455,8 @@ static void cbw(I8086* cpu) {
 	else {
 		AH = 0;
 	}
-	CYCLES(2);
 }
-static void cwd(I8086* cpu) {
+static void cwd(I80286* cpu) {
 	/* Convert word to dword (99) b10011001 */
 	if (AX & 0x8000) {
 		DX = 0xFFFF;
@@ -1196,123 +1464,129 @@ static void cwd(I8086* cpu) {
 	else {
 		DX = 0;
 	}
-	CYCLES(5);
 }
 
-static void wait(I8086* cpu) {
+static void wait(I80286* cpu) {
 	/* wait (9B) b10011011 */
-	//if (!cpu->test) {
-		//IP -= cpu->instruction_len;
-	//}
-	CYCLES(4);
+	/*if (!cpu->test) {
+		IP -= cpu->instruction_len;
+	}*/
+	(void)cpu;
 }
 
-static void sahf(I8086* cpu) {
+static void sahf(I80286* cpu) {
 	/* Store AH into flags (9E) b10011110 */
 	PSW &= 0xFF02; /* Mask hi byte; Clear bit 2 */
 	PSW |= AH & 0xD5;
-	CYCLES(4);
 }
-static void lahf(I8086* cpu) {
+static void lahf(I80286* cpu) {
 	/* Load flags into AH (9F) b10011111 */
 	AH = PSW & 0xD7;
-	CYCLES(4);
 }
 
-static void hlt(I8086* cpu) {
+static void hlt(I80286* cpu) {
 	/* Halt CPU (F4) b11110100 */
-	IP -= cpu->instruction_len;
-	CYCLES(2);
+	cpu->halt = 1;
+	//IP -= cpu->instruction_len;
 }
-static void cmc(I8086* cpu) {
-	// Complement carry flag (F5) b11110101
+static void cmc(I80286* cpu) {
+	/* Complement carry flag (F5) b11110101 */
 	CF = !CF;
-	CYCLES(2);
 }
-static void clc(I8086* cpu) {
-	// clear carry flag (F8) b11111000
+static void clc(I80286* cpu) {
+	/* clear carry flag (F8) b11111000 */
 	CF = 0;
-	CYCLES(2);
 }
-static void stc(I8086* cpu) {
-	// set carry flag (F9) b11111001
+static void stc(I80286* cpu) {
+	/* set carry flag (F9) b11111001 */
 	CF = 1;
-	CYCLES(2);
 }
-static void cli(I8086* cpu) {
-	// clear interrupt flag (FA) b11111010
+static void cli(I80286* cpu) {
+	/* clear interrupt flag (FA) b11111010 */
 	IF = 0;
-	CYCLES(2);
 }
-static void sti(I8086* cpu) {
-	// set interrupt flag (FB) b1111011
+static void sti(I80286* cpu) {
+	/* set interrupt flag (FB) b1111011 */
 	IF = 1;
-	CYCLES(2);
 }
-static void cld(I8086* cpu) {
-	// clear direction flag (FC) b11111100
+static void cld(I80286* cpu) {
+	/* clear direction flag (FC) b11111100 */
 	DF = 0;
-	CYCLES(2);
 }
-static void std(I8086* cpu) {
-	// set direction flag (FD) b11111101
+static void std(I80286* cpu) {
+	/* set direction flag (FD) b11111101 */
 	DF = 1;
-	CYCLES(2);
 }
 
-static void inc_reg(I8086* cpu) {
+static void inc_reg(I80286* cpu) {
 	/* Inc reg16 (40-47) b01000REG */
 	uint16_t tmp = reg16_read(cpu, cpu->opcode);
-	alu_inc16(cpu, &tmp);
+	i80286_alu_inc16(cpu, &tmp);
 	reg16_write(cpu, cpu->opcode, tmp);
-	CYCLES(2);
 }
-static void inc_rm(I8086* cpu) {
+static void inc_rm(I80286* cpu) {
 	/* Inc R/M (FE/FF, R/M reg = 000) b1111111W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_inc16(cpu, &tmp);
-		op16_write(cpu, rm, tmp);
-		CYCLES_RM(2, 15);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_inc16(cpu, &tmp);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_inc8(cpu, &tmp);
-		op8_write(cpu, rm, tmp);
-		CYCLES_RM(3, 15);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_inc8(cpu, &tmp);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-	TRANSFERS_RM(0, 2);
 }
 
-static void dec_reg(I8086* cpu) {
+static void dec_reg(I80286* cpu) {
 	/* Dec reg16 (48-4F) b01001REG */
 	uint16_t tmp = reg16_read(cpu, cpu->opcode);
-	alu_dec16(cpu, &tmp);
+	i80286_alu_dec16(cpu, &tmp);
 	reg16_write(cpu, cpu->opcode, tmp);
-	CYCLES(2);
 }
-static void dec_rm(I8086* cpu) {
+static void dec_rm(I80286* cpu) {
 	/* Dec R/M (FE/FF, R/M reg = 001) b1111111W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_dec16(cpu, &tmp);
-		op16_write(cpu, rm, tmp);
-		CYCLES_RM(2, 15);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_dec16(cpu, &tmp);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_dec8(cpu, &tmp);
-		op8_write(cpu, rm, tmp);
-		CYCLES_RM(3, 15);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_dec8(cpu, &tmp);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-	TRANSFERS_RM(0, 2);
 }
 
-static void rol(I8086* cpu) {
+static void rol(I80286* cpu) {
 	/* Rotate left (D0/D1/D2/D3, R/M reg = 000) b110100VW */
 	uint8_t count = 1;
 	if (VW) {
@@ -1320,28 +1594,31 @@ static void rol(I8086* cpu) {
 	}
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_rol16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rol16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_rol8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rol8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-
-	if (VW) {
-		CYCLES((4 * count));
-		CYCLES_RM(8, 20);
-	}
-	else {
-		CYCLES_RM(2, 15);
-	}
-	TRANSFERS_RM(0, 2);
 }
-static void ror(I8086* cpu) {
+static void ror(I80286* cpu) {
 	/* Rotate left (D0/D1/D2/D3, R/M reg = 001) b110100VW */
 	uint8_t count = 1;
 	if (VW) {
@@ -1349,28 +1626,31 @@ static void ror(I8086* cpu) {
 	}
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_ror16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_ror16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_ror8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_ror8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-
-	if (VW) {
-		CYCLES((4 * count));
-		CYCLES_RM(8, 20);
-	}
-	else {
-		CYCLES_RM(2, 15);
-	}
-	TRANSFERS_RM(0, 2);
 }
-static void rcl(I8086* cpu) {
+static void rcl(I80286* cpu) {
 	/* Rotate through carry left (D0/D1/D2/D3, R/M reg = 010) b110100VW */
 	uint8_t count = 1;
 	if (VW) {
@@ -1378,28 +1658,31 @@ static void rcl(I8086* cpu) {
 	}
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_rcl16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcl16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_rcl8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcl8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-
-	if (VW) {
-		CYCLES((4 * count));
-		CYCLES_RM(8, 20);
-	}
-	else {
-		CYCLES_RM(2, 15);
-	}
-	TRANSFERS_RM(0, 2);
 }
-static void rcr(I8086* cpu) {
+static void rcr(I80286* cpu) {
 	/* Rotate through carry right (D0/D1/D2/D3, R/M reg = 011) b110100VW */
 	uint8_t count = 1;
 	if (VW) {
@@ -1407,28 +1690,31 @@ static void rcr(I8086* cpu) {
 	}
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_rcr16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcr16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_rcr8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcr8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-
-	if (VW) {
-		CYCLES((4 * count));
-		CYCLES_RM(8, 20);
-	}
-	else {
-		CYCLES_RM(2, 15);
-	}
-	TRANSFERS_RM(0, 2);
 }
-static void shl(I8086* cpu) {
+static void shl(I80286* cpu) {
 	/* Shift left (D0/D1/D2/D3, R/M reg = 100) b110100VW */
 	uint8_t count = 1;
 	if (VW) {
@@ -1436,28 +1722,31 @@ static void shl(I8086* cpu) {
 	}
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_shl16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shl16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_shl8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shl8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-
-	if (VW) {
-		CYCLES((4 * count));
-		CYCLES_RM(8, 20);
-	}
-	else {
-		CYCLES_RM(2, 15);
-	}
-	TRANSFERS_RM(0, 2);
 }
-static void shr(I8086* cpu) {
+static void shr(I80286* cpu) {
 	/* Shift Logical right (D0/D1/D2/D3, R/M reg = 101) b110100VW */
 	uint8_t count = 1;
 	if (VW) {
@@ -1465,28 +1754,63 @@ static void shr(I8086* cpu) {
 	}
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_shr16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shr16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_shr8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shr8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void sal(I80286* cpu) {
+	/* Shift Arithmetic left (D0/D1/D2/D3, R/M reg = 110) b110100VW */
+	uint8_t count = 1;
+	if (VW) {
+		count = CL;
 	}
 
-	if (VW) {
-		CYCLES((4 * count));
-		CYCLES_RM(8, 20);
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sal16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		CYCLES_RM(2, 15);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sal8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-	TRANSFERS_RM(0, 2);
 }
-static void sar(I8086* cpu) {
+static void sar(I80286* cpu) {
 	/* Shift Arithmetic right (D0/D1/D2/D3, R/M reg = 111) b110100VW */
 	uint8_t count = 1;
 	if (VW) {
@@ -1494,50 +1818,313 @@ static void sar(I8086* cpu) {
 	}
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_sar16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sar16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_sar8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sar8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-
-	if (VW) {
-		CYCLES((4 * count));
-		CYCLES_RM(8, 20);
-	}
-	else {
-		CYCLES_RM(2, 15);
-	}
-	TRANSFERS_RM(0, 2);
 }
 
-static void setmo(I8086* cpu) {
-	/* Set Minus One (D0/D1/D2/D3, R/M reg = 110) b110100VW (undocumented) */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
+static void rol_rm_imm(I80286* cpu) {
+	/* Rotate left (C0/C1, R/M reg = 000) b1100000W */
+	uint8_t count = 0;
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_setmo16(cpu, &tmp, count);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rol16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_setmo8(cpu, &tmp, count);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rol8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void ror_rm_imm(I80286* cpu) {
+	/* Rotate left (C0/C1, R/M reg = 001) b1100000W */
+	uint8_t count = 0;
+
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_ror16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	else {
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_ror8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void rcl_rm_imm(I80286* cpu) {
+	/* Rotate through carry left (C0/C1, R/M reg = 010) b1100000W */
+	uint8_t count = 0;
+
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcl16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	else {
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcl8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void rcr_rm_imm(I80286* cpu) {
+	/* Rotate through carry right (C0/C1, R/M reg = 011) b1100000W */
+	uint8_t count = 0;
+
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcr16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	else {
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_rcr8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void shl_rm_imm(I80286* cpu) {
+	/* Shift left (C0/C1, R/M reg = 100) b1100000W */
+	uint8_t count = 0;
+
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shl16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	else {
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shl8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void shr_rm_imm(I80286* cpu) {
+	/* Shift Logical right (C0/C1, R/M reg = 101) b1100000W */
+	uint8_t count = 0;
+
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shr16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	else {
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_shr8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void sal_rm_imm(I80286* cpu) {
+	/* Shift Arithmetic left (C0/C1, R/M reg = 110) b1100000W */
+	uint8_t count = 0;
+
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sal16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	else {
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sal8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void sar_rm_imm(I80286* cpu) {
+	/* Shift Arithmetic right (C0/C1, R/M reg = 111) b1100000W */
+	uint8_t count = 0;
+
+	if (W) {
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sar16(cpu, &tmp, count);
+		modrm_write_rm16(cpu, rm, tmp);
+	}
+	else {
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_sar8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
 }
 
-static int jump_condition(I8086* cpu) {
+static int jump_condition(I80286* cpu) {
 	switch (CCCC) {
 		case JCC_JO:
 			if (OF) return 1;
@@ -1590,395 +2177,343 @@ static int jump_condition(I8086* cpu) {
 	}
 	return 0;
 }
-static void jcc(I8086* cpu) {
+static void jcc(I80286* cpu) {
 	/* conditional jump(70-7F) b011XCCCC
 	   8086 cpu decode 60-6F the same as 70-7F */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	if (jump_condition(cpu)) {
 		uint16_t offset = sign_extend8_16(imm);
 		IP += offset;
-		CYCLES(16);
-	}
-	else {
-		CYCLES(4);
 	}
 }
-static void jcxz(I8086* cpu) {
+static void jcxz(I80286* cpu) {
 	/* jump if CX zero (E3) b11100011 */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	if (CX == 0) {
 		uint16_t offset = sign_extend8_16(imm);
 		IP += offset;
-		CYCLES(18);
-	}
-	else {
-		CYCLES(6);
 	}
 }
 
-static void jmp_intra_direct_short(I8086* cpu) {
+static void jmp_intra_direct_short(I80286* cpu) {
 	/* Jump short imm8 (EB) b11101011 */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	uint16_t se = sign_extend8_16(imm);
 	IP += se;
-	CYCLES(15);
 }
-static void jmp_intra_direct(I8086* cpu) {
+static void jmp_intra_direct(I80286* cpu) {
 	/* Jump near  imm16 (E9) b11101001 */
-	uint16_t imm = fetch_word(cpu);
+	uint16_t imm = 0;
+	if (!fetch_word(cpu, &imm)) {
+		return;
+	}
 	IP += imm;
-	CYCLES(15);
 }
-static void jmp_inter_direct(I8086* cpu) {
+static void jmp_inter_direct(I80286* cpu) {
 	/* Jump far addr:seg (EA) b11101010 */
-	uint16_t imm = fetch_word(cpu);
-	uint16_t imm2 = fetch_word(cpu);
+	uint16_t imm = 0;
+	uint16_t imm2 = 0;
+	if (!fetch_word(cpu, &imm)) {
+		return;
+	}
+	if (!fetch_word(cpu, &imm2)) {
+		return;
+	}
 	IP = imm;
 	CS = imm2;
-	CYCLES(15);
 }
 
-static void jmp_intra_indirect(I8086* cpu) {
-	/* Jump near indirect (FE/FF, R/M reg = 100) b1111111W */
+static void jmp_intra_indirect(I80286* cpu) {
+	/* Jump near indirect (FF, R/M reg = 100) b11111111 */
 
-	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		IP = op16_read(cpu, rm);
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
 	}
-	else {
-		/* Undocumented instruction; JMP near byte R/M.
-			This is based on the JSON 8086 v2 undefined opcode tests.
-			02.09.2025 - tommojphillips */
-
-		OPERAND8 rm = modrm_get_op8(cpu);
-		if (cpu->modrm.mod == 0b11) {
-			/* For a 8bit register, the pair is actually reversed;
-				Toggle bit3 in the rm field of the modrm byte to
-				access the other 8bit register in the pair. */
-			cpu->modrm.rm ^= 0x4;
-			OPERAND8 rm2 = modrm_get_op8(cpu);
-			IP = op8_read(cpu, rm);
-			IP |= ((uint16_t)op8_read(cpu, rm2) << 8);
-		}
-		else {
-			/* For a memory location; Set the hi byte to FF. */
-			IP = 0xFF00 | op8_read(cpu, rm);
-		}
-	}
-
-	TRANSFERS_RM(0, 1);
-	CYCLES_RM(11, 18);
+	modrm_read_rm16(cpu, rm, &IP);
 }
-static int jmp_inter_indirect(I8086* cpu) {
-	/* Jump far indirect (FE/FF, R/M reg = 101) b1111111W */
+static void jmp_inter_indirect(I80286* cpu) {
+	/* Jump far indirect (FF, R/M reg = 101) b11111111 */
+	uint16_t segment = 0;
+	uint16_t offset = 0;
 
-	if (W) {
-		if (cpu->modrm.mod == 0b11) {
-			/* Undocumented instruction; JMP far word R/M.
-			This instruction cannot be traditionally emulated when
-			register operands are specified. Due to	assumptions
-			made by the microcode, this routine	uses the internal
-			register tmpb which is stale/uninitialized. */
-			return I8086_DECODE_UNDEFINED;
-		}
-		else {
-			uint16_t segment = modrm_get_segment(cpu);
-			uint16_t offset = modrm_get_offset(cpu);
-			IP = read_word(cpu, segment, offset);
-			CS = read_word(cpu, segment, offset + 2);
-		}
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
 	}
-	else {
-		if (cpu->modrm.mod == 0b11) {
-			/* Undocumented instruction; JMP far byte R/M.
-			This instruction cannot be traditionally emulated when
-			register operands are specified. Due to	assumptions
-			made by the microcode, this routine	uses the internal
-			register tmpb which is stale/uninitialized. */
-			return I8086_DECODE_UNDEFINED;
-		}
-		else {
-			/* Undocumented instruction; JMP far byte R/M. */
 
-			/* Get Mod R/M offset; fetch displacement (if applicable); incrementing IP. */
-			uint16_t offset = modrm_get_offset(cpu);
-
-			/* IP is read respecting segment override. Set the hi byte to FF. */
-			uint16_t segment = modrm_get_segment(cpu);
-			IP = 0xFF00 | read_byte(cpu, segment, offset);
-
-			/* CS is read disregarding segment override. Set the hi byte to FF. */
-			cpu->segment_prefix = 0xFF;
-			segment = modrm_get_segment(cpu);
-			CS = 0xFF00 | read_byte(cpu, segment, offset);
-		}
+	segment = modrm_get_segment(cpu);
+	if (!modrm_get_offset(cpu, &offset)) {
+		return;
 	}
-	TRANSFERS(2);
-	CYCLES(24);
-	return I8086_DECODE_OK;
+	if (!read_word(cpu, segment, offset, &IP)) {
+		return;
+	}
+	if (!read_word(cpu, segment, offset + 2, &CS)) {
+		return;
+	}
 }
 
-static void call_intra_direct(I8086* cpu) {
+static void call_intra_direct(I80286* cpu) {
 	/* Call disp (E8) b11101000 */
-
-	/* NOTE: We need to read ip prior to pushing it.
-		This is so if SP = [R/M],
-		it doesn't write over it when pushing ip.
-		This is based on the JSON 8088 tests. */
-
-	uint16_t imm = fetch_word(cpu);
+	uint16_t imm = 0;
+	if (!fetch_word(cpu, &imm)) {
+		return;
+	}
 	push_word(cpu, IP);
 	IP += imm;
-	TRANSFERS(1);
-	CYCLES(19);
 }
-static void call_inter_direct(I8086* cpu) {
+static void call_inter_direct(I80286* cpu) {
 	/* Call addr:seg (9A) b10011010 */
-
-	/* NOTE: We need to read ip,cs prior to pushing them.
-		This is so if SP = [R/M],
-		it doesn't write over it when pushing ip,cs.
-		This is based on the JSON 8088 tests. */
-
-	uint16_t ip = fetch_word(cpu);
-	uint16_t cs = fetch_word(cpu);
+	uint16_t imm = 0;
+	uint16_t imm2 = 0;
+	if (!fetch_word(cpu, &imm)) {
+		return;
+	}
+	if (!fetch_word(cpu, &imm2)) {
+		return;
+	}
 	push_word(cpu, CS);
 	push_word(cpu, IP);
-	IP = ip;
-	CS = cs;
-	TRANSFERS(2);
-	CYCLES(28);
+	IP = imm;
+	CS = imm2;
 }
 
-static void call_intra_indirect(I8086* cpu) {
-	/* Call near R/M (FE/FF, R/M reg = 010) b1111111W */
-
+static void call_intra_indirect(I80286* cpu) {
+	/* Call near R/M (FF, R/M reg = 010) b11111111 */
 	uint16_t ip = 0;
-
-	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		ip = op16_read(cpu, rm);
-		push_word(cpu, IP);
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
 	}
-	else {
-		/* Undocumented instruction; CALL near byte R/M. */
-
-		OPERAND8 rm = modrm_get_op8(cpu);
-		if (cpu->modrm.mod == 0b11) {
-			/* For a 8bit register, the pair is actually reversed;
-				Toggle bit3 in the rm field of the modrm byte to
-				access the other 8bit register in the pair. */
-			cpu->modrm.rm ^= 0x4;
-			OPERAND8 rm2 = modrm_get_op8(cpu);
-			ip = op8_read(cpu, rm);
-			ip |= ((uint16_t)op8_read(cpu, rm2) << 8);
-		}
-		else {
-			/* For a memory location; Set the hi byte to FF. */
-			ip = 0xFF00 | op8_read(cpu, rm);
-		}
-
-		/* Only the lo byte of IP is pushed to the stack. */
-		push_byte(cpu, IP & 0xFF);
+	if (!modrm_read_rm16(cpu, rm, &ip)) {
+		return;
 	}
+	push_word(cpu, IP);
+
 	IP = ip;
-
-	TRANSFERS_RM(1, 2);
-	CYCLES_RM(16, 21);
 }
-static int call_inter_indirect(I8086* cpu) {
-	/* Call far R/M (FE/FF, R/M reg = 011) b1111111W */
+static void call_inter_indirect(I80286* cpu) {
+	/* Call far R/M (FF, R/M reg = 011) b11111111 */
 		
 	uint16_t ip = 0;
 	uint16_t cs = 0;
+	uint16_t segment = 0;
+	uint16_t offset = 0;
 
-	if (W) {
-		if (cpu->modrm.mod == 0b11) {
-			/* Undocumented instruction; CALL far word R/M.
-			This instruction cannot be traditionally emulated when
-			register operands are specified. Due to	assumptions
-			made by the microcode, this routine	uses the internal
-			register tmpb which is stale/uninitialized. */
-			return I8086_DECODE_UNDEFINED;
-		}
-		else {
-			uint16_t segment = modrm_get_segment(cpu);
-			uint16_t offset = modrm_get_offset(cpu);
-			ip = read_word(cpu, segment, offset);
-			cs = read_word(cpu, segment, offset + 2);
-		}
-
-		push_word(cpu, CS);
-		push_word(cpu, IP);
-	}
-	else {		
-		if (cpu->modrm.mod == 0b11) {
-			/* Undocumented instruction; CALL far byte R/M.
-			This instruction cannot be traditionally emulated when
-			register operands are specified. Due to	assumptions
-			made by the microcode, this routine	uses the internal
-			register tmpb which is stale/uninitialized. */
-			return I8086_DECODE_UNDEFINED;
-		}
-		else {
-			/* Undocumented instruction; CALL far byte R/M. */
-
-			/* Get Mod R/M offset; fetch displacement (if applicable); incrementing IP. */
-			uint16_t offset = modrm_get_offset(cpu);
-
-			/* IP is read respecting segment override. Set the hi byte to FF. */
-			uint16_t segment = modrm_get_segment(cpu);
-			ip = 0xFF00 | read_byte(cpu, segment, offset);
-
-			/* CS is read disregarding segment override. Set the hi byte to FF. */
-			cpu->segment_prefix = 0xFF;
-			segment = modrm_get_segment(cpu);
-			cs = 0xFF00 | read_byte(cpu, segment, offset);
-		}
-
-		/* Only the lo byte of CS and IP are pushed to the stack. */
-		push_byte(cpu, CS & 0xFF);
-		push_byte(cpu, IP & 0xFF);
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
 	}
 
+	segment = modrm_get_segment(cpu);
+	if (!modrm_get_offset(cpu, &offset)) {
+		return;
+	}
+	if (!read_word(cpu, segment, offset, &ip)) {
+		return;
+	}
+	if (!read_word(cpu, segment, offset + 2, &cs)) {
+		return;
+	}
+
+	push_word(cpu, CS);
+	push_word(cpu, IP);
+	
 	IP = ip;
 	CS = cs;
-	TRANSFERS(4);
-	CYCLES(37);
-	return I8086_DECODE_OK;
 }
 
-static void ret_intra_add_imm(I8086* cpu) {
-	/* Ret imm16 (C2) b110000X0 - undocumented* on 8086 C0 decodes identically to C2 */
-	uint16_t imm = fetch_word(cpu);
-	pop_word(cpu, &IP);
-	SP += imm; 
-	TRANSFERS(1);
-	CYCLES(12);
-}
-static void ret_intra(I8086* cpu) {
-	/* Ret (C3) b110000X1 - undocumented* on 8086 C1 decodes identically to C3 */
-	pop_word(cpu, &IP);
-	TRANSFERS(1);
-	CYCLES(8);
-}
-static void ret_inter_add_imm(I8086* cpu) {
-	/* Ret imm16 (CA) b110010X0 - undocumented* on 8086 C8 decodes identically to CA */
-	uint16_t imm = fetch_word(cpu);
-	pop_word(cpu, &IP);
-	pop_word(cpu, &CS);
+static void ret_intra_add_imm(I80286* cpu) {
+	/* retn imm16 (C2) b11000010 */
+	uint16_t imm = 0;
+	if (!fetch_word(cpu, &imm)) {
+		return;
+	}
+	if (!pop_word(cpu, &IP)) {
+		return;
+	}
 	SP += imm;
-	TRANSFERS(2);
-	CYCLES(17);
 }
-static void ret_inter(I8086* cpu) {
-	/* Ret (CB) b110010X1 - undocumented* on 8086 C9 decodes identically to CB */
-	pop_word(cpu, &IP);
-	pop_word(cpu, &CS);
-	TRANSFERS(2);
-	CYCLES(18);
+static void ret_intra(I80286* cpu) {
+	/* retn (C3) b11000011 */
+	if (!pop_word(cpu, &IP)) {
+		return;
+	}
+}
+static void ret_inter_add_imm(I80286* cpu) {
+	/* retf imm16 (CA) b11001010 */
+
+	uint16_t imm = 0;
+	if (!fetch_word(cpu, &imm)) {
+		return;
+	}
+	if (!pop_word(cpu, &IP)) {
+		return;
+	}
+	if (!pop_word(cpu, &CS)) {
+		return;
+	}
+	SP += imm;
+}
+static void ret_inter(I80286* cpu) {
+	/* retf (CB) b11001011 */
+	if (!pop_word(cpu, &IP)) {
+		return;
+	}
+	if (!pop_word(cpu, &CS)) {
+		return;
+	}
 }
 
-static void mov_rm_imm(I8086* cpu) {
+static void mov_rm_imm(I80286* cpu) {
 	/* mov r/m, imm (C6/C7) b1100011W */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (cpu->modrm.u.bits.reg != 0) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t imm = fetch_word(cpu);
-		op16_write(cpu, rm, imm);
+		OPERAND16 rm = { 0 };
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		modrm_write_rm16(cpu, rm, imm);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t imm = fetch_byte(cpu);
-		op8_write(cpu, rm, imm);
+		OPERAND8 rm = { 0 };
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
+		modrm_write_rm8(cpu, rm, imm);
 	}
-	TRANSFERS_RM(0, 1);
-	CYCLES_RM(4, 10);
 }
-static void mov_reg_imm(I8086* cpu) {
+static void mov_reg_imm(I80286* cpu) {
 	/* mov r/m, reg (B0-BF) b1011WREG */
 	if (WREG) {
-		uint16_t imm = fetch_word(cpu);
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
 		reg16_write(cpu, cpu->opcode, imm);
 	}
 	else {
-		uint8_t imm = fetch_byte(cpu);
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return;
+		}
 		reg8_write(cpu, cpu->opcode, imm);
 	}
-	CYCLES(4);
 }
-static void mov_rm_reg(I8086* cpu) {
+static void mov_rm_reg(I80286* cpu) {
 	/* mov r/m, reg (88/89/8A/8B) b100010DW */
-	fetch_modrm(cpu);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
+		OPERAND16 rm = { 0 };
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
 		if (D) {
-			uint16_t tmp = op16_read(cpu, rm);
-			reg16_write(cpu, cpu->modrm.reg, tmp);
+			uint16_t tmp = 0;
+			if (!modrm_read_rm16(cpu, rm, &tmp)) {
+				return;
+			}
+			modrm_write_reg16(cpu, tmp);
 		}
 		else {
-			uint16_t tmp = reg16_read(cpu, cpu->modrm.reg);
-			op16_write(cpu, rm, tmp);
+			uint16_t tmp = modrm_read_reg16(cpu);
+			modrm_write_rm16(cpu, rm, tmp);
 		}
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
+		OPERAND8 rm = { 0 };
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
 		if (D) {
-			uint8_t tmp = op8_read(cpu, rm);
-			reg8_write(cpu, cpu->modrm.reg, tmp);
+			uint8_t tmp = 0;
+			if (!modrm_read_rm8(cpu, rm, &tmp)) {
+				return;
+			}
+			modrm_write_reg8(cpu, tmp);
 		}
 		else {
-			uint8_t tmp = reg8_read(cpu, cpu->modrm.reg);
-			op8_write(cpu, rm, tmp);
+			uint8_t tmp = modrm_read_reg8(cpu);
+			modrm_write_rm8(cpu, rm, tmp);
 		}
 	}
-	TRANSFERS_RM(0, 1);
-	CYCLES_RM_D(2, 9, 8);
 }
-static void mov_accum_mem(I8086* cpu) {
+static void mov_accum_mem(I80286* cpu) {
 	/* mov AL/AX, [mem] (A0/A1/A2/A3) b101000DW */
-	uint16_t addr = fetch_word(cpu);
+	uint16_t addr = 0;
+	if (!fetch_word(cpu, &addr)) {
+		return;
+	}
 	if (W) {
-		OPERAND16 mem = mem_get_op16(SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr);
 		if (D) {
-			uint16_t tmp = reg16_read(cpu, REG_AX);
-			op16_write(cpu, mem, tmp);
+			write_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, AX);
 		}
 		else {
-			uint16_t tmp = op16_read(cpu, mem);
-			reg16_write(cpu, REG_AX, tmp);
+			read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, &AX);
 		}
 	}
 	else {
-		OPERAND8 mem = mem_get_op8(SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr);
 		if (D) {
-			uint8_t tmp = reg8_read(cpu, REG_AL);
-			op8_write(cpu, mem, tmp);
+			write_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, AL);
 		}
 		else {
-			uint8_t tmp = op8_read(cpu, mem);
-			reg8_write(cpu, REG_AL, tmp);
+			read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, &AL);
 		}
 	}
-	TRANSFERS(1);
-	CYCLES(10);
 }
-static void mov_seg(I8086* cpu) {
+static void mov_seg(I80286* cpu) {
 	/* mov r/m, seg (8C/8E) b100011D0 */
-	fetch_modrm(cpu);		
-	OPERAND16 rm = modrm_get_op16(cpu);
-	uint16_t* seg = GET_SEG(cpu->modrm.reg);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+
+	uint8_t sreg = 0;
+	if (!modrm_get_seg_index(cpu, &sreg)) {
+		return;
+	}
 
 	if (D) {
-		*seg = op16_read(cpu, rm);
+		if (sreg == SEG_CS) {
+			/* illegal - mov cs, r/m */
+			i80286_exception(cpu, EXCEPTION_UD); 
+			return;
+		}
+		modrm_read_rm16(cpu, rm, &cpu->segments[sreg].selector);
 	}
 	else {
-		op16_write(cpu, rm, *seg);
+		modrm_write_rm16(cpu, rm, cpu->segments[sreg].selector);
 	}
 	
-	TRANSFERS_RM(0, 1);
-	CYCLES_RM_D(2, 9, 8);
-
 	if (D) {
 		/* Interrupts Following 'MOV SS, XXX' May Corrupt Memory. On early Intel 8088 processors
 			(marked "INTEL '78" or "(C) 1978"), if an interrupt occurs immediately after a 
@@ -1988,30 +2523,52 @@ static void mov_seg(I8086* cpu) {
 	}
 }
 
-static void lea(I8086* cpu) {
+static void lea(I80286* cpu) {
 	/* lea reg16, [r/m] (8D) b10001101 */
-	fetch_modrm(cpu);
-	uint16_t addr = modrm_get_offset(cpu);
-	reg16_write(cpu, cpu->modrm.reg, addr);
-	CYCLES(2);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	uint16_t offset = 0;
+	if (!modrm_get_offset(cpu, &offset)) {
+		return;
+	}
+	modrm_write_reg16(cpu, offset);
 }
 
-static void not(I8086* cpu) {
+static void not(I80286* cpu) {
 	/* not reg (F6/F7, R/M reg = b010) b1111011W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		op16_write(cpu, rm, ~tmp);
+		OPERAND16 rm = { 0 };
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		uint16_t tmp = 0;
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_not16(cpu, &tmp);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		op8_write(cpu, rm, ~tmp);
+		OPERAND8 rm = { 0 };
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		uint8_t tmp = 0;
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_not8(cpu, &tmp);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(3, 16);
 }
-static void neg(I8086* cpu) {
+static void neg(I80286* cpu) {
 	/* neg reg (F6/F7, R/M reg = b011) b1111011W */
 	
 	/* If the operand is zero, its sign is not changed.
@@ -2022,150 +2579,273 @@ static void neg(I8086* cpu) {
 	 operand is zero, in which case it is cleared */
 
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_neg16(cpu, &tmp);
-		op16_write(cpu, rm, tmp);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if(!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_neg16(cpu, &tmp);
+		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_neg8(cpu, &tmp);
-		op8_write(cpu, rm, tmp);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if(!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_neg8(cpu, &tmp);
+		modrm_write_rm8(cpu, rm, tmp);
 	}
-	TRANSFERS_RM(0, 2);
-	CYCLES_RM(3, 16);
 }
-static void mul_rm(I8086* cpu) {
+
+static void mul_rm(I80286* cpu) {
 	/* mul r/m (F6/F7, R/M reg = b100) b1111011W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_mul16(cpu, AX, tmp, &AX, &DX);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(118, 224);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		uint32_t product = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_mul16(cpu, AX, tmp, &product);
+		DX = product >> 16;
+		AX = product & 0xFFFF;
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_mul8(cpu, AL, tmp, &AL, &AH);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(70, 76);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		uint16_t product = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_mul8(cpu, AL, tmp, &product);
+		AX = product;
 	}
 }
-static void imul_rm(I8086* cpu) {
+static void imul_rm(I80286* cpu) {
 	/* imul r/m (F6/F7, R/M reg = b101) b1111011W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_imul16(cpu, AX, tmp, &AX, &DX);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(128, 134);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		uint32_t product = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_imul16(cpu, AX, tmp, &product);
+		DX = product >> 16;
+		AX = product & 0xFFFF;
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_imul8(cpu, AL, tmp, &AL, &AH);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(80, 86);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		uint16_t product = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		i80286_alu_imul8(cpu, AL, tmp, &product);
+		AX = product;
+	}
+}
+static void imul_rm_imm(I80286* cpu) {
+	/* imul reg,r/m,imm (69/6B, R/M reg = b101) b011010S1 */
+
+	OPERAND16 rm = { 0 };
+	uint16_t multiplicand = 0;
+	uint32_t product = 0;
+	uint16_t imm = 0;
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+	if (S) {
+		uint8_t imm2 = 0;
+		if (!fetch_byte(cpu, &imm2)) {
+			return;
+		}
+
+		imm = sign_extend8_16(imm2);
+	}
+	else {
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
 	}
 
+	if (!modrm_read_rm16(cpu, rm, &multiplicand)) {
+		return;
+	}
+	i80286_alu_imul16(cpu, multiplicand, imm, &product);
+	modrm_write_reg16(cpu, product & 0xFFFF);
 }
-static void div_rm(I8086* cpu) {
+static void div_rm(I80286* cpu) {
 	/* div r/m (F6/F7, R/M reg = b110) b1111011W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_div16(cpu, AX, DX, tmp, &AX, &DX);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(144, 150);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		uint32_t dividend = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		dividend = DX << 16 | AX;
+		i80286_alu_div16(cpu, dividend, tmp, &AX, &DX);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_div8(cpu, AL, AH, tmp, &AL, &AH);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(80, 86);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		uint16_t dividend = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		dividend = AX;
+		i80286_alu_div8(cpu, dividend, tmp, &AL, &AH);
 	}
 }
-static void idiv_rm(I8086* cpu) {
+static void idiv_rm(I80286* cpu) {
 	/* idiv r/m (F6/F7, R/M reg = b111) b1111011W */
 	if (W) {
-		OPERAND16 rm = modrm_get_op16(cpu);
-		uint16_t tmp = op16_read(cpu, rm);
-		alu_idiv16(cpu, AX, DX, tmp, &AX, &DX);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(165, 171);
+		OPERAND16 rm = { 0 };
+		uint16_t tmp = 0;
+		uint32_t dividend = 0;
+		if (!modrm_get_rm16(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+			return;
+		}
+		dividend = DX << 16 | AX;
+		i80286_alu_idiv16(cpu, dividend, tmp, &AX, &DX);
 	}
 	else {
-		OPERAND8 rm = modrm_get_op8(cpu);
-		uint8_t tmp = op8_read(cpu, rm);
-		alu_idiv8(cpu, AL, AH, tmp, &AL, &AH);
-		TRANSFERS_RM(0, 1);
-		CYCLES_RM(101, 107);
+		OPERAND8 rm = { 0 };
+		uint8_t tmp = 0;
+		uint16_t dividend = 0;
+		if (!modrm_get_rm8(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			return;
+		}
+		dividend = AX;
+		i80286_alu_idiv8(cpu, AX, tmp, &AL, &AH);
 	}
-
 }
 
-static int movs(I8086* cpu) {
+static void movs(I80286* cpu) {
 	/* movs (A4/A5) b1010010W */
 
 	/* Rep prefix check */
 	if (F1) {
 		if (CX == 0) {
-			return I8086_DECODE_OK;
+			return;
 		}
 		CX -= 1;
 	}
 
+	uint16_t adjustment = 0;
+	if (DF) {
+		adjustment = 0xFFFF;
+	}
+	else {
+		adjustment = 1;
+	}
+
 	/* Do string operation */
 	if (W) {
-		uint16_t src = read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI);
-		write_word(cpu, ES, DI, src);
+		uint16_t src = 0;
+		if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
+			if (write_word(cpu, ES, DI, src)) {
+				/* Rep prefix check */
+				if (F1) {
+					IP -= cpu->instruction_len; /* Allow interrupts */
+				}
+			}
+			else {
+				if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
+			}
+			DI += adjustment;
+			DI += adjustment;
+		}
+		SI += adjustment;
+		SI += adjustment;
 	}
 	else {
-		uint8_t src = read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI);
-		write_byte(cpu, ES, DI, src);
+		uint8_t src = 0;
+		if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
+			if (write_byte(cpu, ES, DI, src)) {
+				/* Rep prefix check */
+				if (F1) {
+					IP -= cpu->instruction_len; /* Allow interrupts */
+				}
+			}
+			else {
+				if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
+			}
+			DI += adjustment;
+		}
+		SI += adjustment;
 	}
-	TRANSFERS(2);
-	CYCLES(18);
-
-	/* Adjust si/di delta */
-	if (DF) {
-		SI -= (1 << W);
-		DI -= (1 << W);
-	}
-	else {
-		SI += (1 << W);
-		DI += (1 << W);
-	}
-
-	/* Rep prefix check */
-	if (F1) {
-		IP -= cpu->instruction_len; /* Allow interrupts */
-	}
-	return I8086_DECODE_OK;
 }
-static int stos(I8086* cpu) {
+static void stos(I80286* cpu) {
 	/* stos (AA/AB) b1010101W */
 
 	/* Rep prefix check */
 	if (F1) {
 		if (CX == 0) {
-			return I8086_DECODE_OK;
+			return;
 		}
 		CX -= 1;
 	}
 
 	/* Do string operation */
 	if (W) {
-		write_word(cpu, ES, DI, AX);
+		if (write_word(cpu, ES, DI, AX)) {
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
+		else {
+			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
+		}
 	}
 	else {
-		write_byte(cpu, ES, DI, AL);
+		if (write_byte(cpu, ES, DI, AL)) {
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
+		else {
+			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
+		}
 	}
-	TRANSFERS(1);
-	CYCLES(11);
 
 	/* Adjust si/di delta */
 	if (DF) {
@@ -2174,34 +2854,35 @@ static int stos(I8086* cpu) {
 	else {
 		DI += (1 << W);
 	}
-
-	/* Rep prefix check */
-	if (F1) {
-		IP -= cpu->instruction_len; /* Allow interrupts */
-	}
-	return I8086_DECODE_OK;
 }
-static int lods(I8086* cpu) {
+static void lods(I80286* cpu) {
 	/* lods (AC/AD) b1010110W */
 
 	/* Rep prefix check */
 	if (F1) {
 		if (CX == 0) {
-			return I8086_DECODE_OK;
+			return;
 		}
 		CX -= 1;
-		CYCLES(1); // +1 per REP
 	}
 
 	/* Do string operation */
 	if (W) {
-		AX = read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI);
+		if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &AX)){
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
 	}
 	else {
-		AL = read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI);
+		if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &AL)){
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
 	}
-	TRANSFERS(1);
-	CYCLES(12);
 
 	/* Adjust si/di delta */
 	if (DF) {
@@ -2210,76 +2891,98 @@ static int lods(I8086* cpu) {
 	else {
 		SI += (1 << W);
 	}
-
-	/* Rep prefix check */
-	if (F1) {
-		IP -= cpu->instruction_len; /* Allow interrupts */
-	}
-	return I8086_DECODE_OK;
 }
-static int cmps(I8086* cpu) {
+static void cmps(I80286* cpu) {
 	/* cmps (A6/A7) b1010011W */
 
 	/* Rep prefix check */
 	if (F1) {
 		if (CX == 0) {
-			return I8086_DECODE_OK;
+			return;
 		}
 		CX -= 1;
 	}
 
+	uint16_t adjustment = 0;
+	if (DF) {
+		adjustment = 0xFFFF;
+	}
+	else {
+		adjustment = 1;
+	}
+
 	/* Do string operation */
 	if (W) {
-		uint16_t src = read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI);
-		uint16_t dest = read_word(cpu, ES, DI);
-		alu_cmp16(cpu, src, dest);
+		uint16_t src = 0;
+		uint16_t dest = 0;
+		if (read_word(cpu, ES, DI, &dest)) {
+			if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
+				i80286_alu_cmp16(cpu, src, dest);
+				/* Rep prefix check */
+				if (F1 && ZF == F1Z) {
+					IP -= cpu->instruction_len; /* Allow interrupts */
+				}
+			}
+			SI += adjustment;
+			SI += adjustment;
+		}
+		else {
+			if (F1) CX += 1; /* Yes, CX doesnt change if DI caused an exception. This makes sense. */
+		}
+		DI += adjustment;
+		DI += adjustment;
 	}
 	else {
-		uint8_t src = read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI);
-		uint8_t dest = read_byte(cpu, ES, DI);
-		alu_cmp8(cpu, src, dest);
+		uint8_t src = 0;
+		uint8_t dest = 0;
+		if (read_byte(cpu, ES, DI, &dest)) {
+			if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
+				i80286_alu_cmp8(cpu, src, dest);
+				/* Rep prefix check */
+				if (F1 && ZF == F1Z) {
+					IP -= cpu->instruction_len; /* Allow interrupts */
+				}
+			}
+			SI += adjustment;
+		}
+		else {
+			if (F1) CX += 1; /* Yes, CX doesnt change if DI caused an exception. This makes sense. */
+		}
+		DI += adjustment;
 	}
-	TRANSFERS(2);
-	CYCLES(22);
-
-	/* Adjust si/di delta */
-	if (DF) {
-		SI -= (1 << W);
-		DI -= (1 << W);
-	}
-	else {
-		SI += (1 << W);
-		DI += (1 << W);
-	}
-
-	/* Rep prefix check */
-	if (F1 && ZF == F1Z) {
-		IP -= cpu->instruction_len; /* Allow interrupts */
-	}
-	return I8086_DECODE_OK;
 }
-static int scas(I8086* cpu) {
+static void scas(I80286* cpu) {
 	/* scas (AE/AF) b1010111W */
 
 	/* Rep prefix check */
 	if (F1) {
 		if (CX == 0) {
-			return I8086_DECODE_OK;
+			return;
 		}
 		CX -= 1;
 	}
 
 	/* Do string operation */
 	if (W) {
-		uint16_t dest = read_word(cpu, ES, DI);
-		alu_cmp16(cpu, AX, dest);
+		uint16_t dest = 0;
+		if (read_word(cpu, ES, DI, &dest)) {
+			i80286_alu_cmp16(cpu, AX, dest);
+			/* Rep prefix check */
+			if (F1 && ZF == F1Z) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
 	}
 	else {
-		uint8_t dest = read_byte(cpu, ES, DI);
-		alu_cmp8(cpu, AL, dest);
+		uint8_t dest = 0;
+		if (read_byte(cpu, ES, DI, &dest)) {
+			i80286_alu_cmp8(cpu, AL, dest);
+			/* Rep prefix check */
+			if (F1 && ZF == F1Z) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
 	}
-	TRANSFERS(1);
-	CYCLES(15);
 
 	/* Adjust si/di delta */
 	if (DF) {
@@ -2288,113 +2991,223 @@ static int scas(I8086* cpu) {
 	else {
 		DI += (1 << W);
 	}
+}
+static void ins(I80286* cpu) {
+	/* ins (6C/6D) b0110110W */
 
 	/* Rep prefix check */
-	if (F1 && ZF == F1Z) {
-		IP -= cpu->instruction_len; /* Allow interrupts */
+	if (F1) {
+		if (CX == 0) {
+			return;
+		}
+		CX -= 1;
 	}
-	return I8086_DECODE_OK;
+
+	/* Do string operation */
+	if (W) {
+		uint16_t dest = (READ_IO_BYTE(DX) | (READ_IO_BYTE(DX + 1) << 8));
+		if (write_word(cpu, ES, DI, dest)) {
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
+		else {
+			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
+		}
+	}
+	else {
+		uint8_t dest = READ_IO_BYTE(DX);
+		if (write_byte(cpu, ES, DI, dest)) {
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+		}
+		else {
+			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
+		}
+	}
+
+	/* Adjust si/di delta */
+	if (DF) {
+		DI -= (1 << W);
+	}
+	else {
+		DI += (1 << W);
+	}
+}
+static void outs(I80286* cpu) {
+	/* ins (6E/6F) b0110111W */
+
+	/* Rep prefix check */
+	if (F1) {
+		if (CX == 0) {
+			return;
+		}
+		CX -= 1;
+	}
+
+	/* Do string operation */
+	if (W) {
+		uint16_t src = 0;
+		if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+			WRITE_IO_BYTE(DX, src & 0xFF);
+			WRITE_IO_BYTE(DX+1, (src >> 8) & 0xFF);
+		}
+	}
+	else {
+		uint8_t src = 0;
+		if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
+			/* Rep prefix check */
+			if (F1) {
+				IP -= cpu->instruction_len; /* Allow interrupts */
+			}
+			WRITE_IO_BYTE(DX, src);
+		}
+	}
+
+	/* Adjust si/di delta */
+	if (DF) {
+		SI -= (1 << W);
+	}
+	else {
+		SI += (1 << W);
+	}
 }
 
-static void les(I8086* cpu) {
+static void les(I80286* cpu) {
 	/* les (C4) b11000100 */
-	fetch_modrm(cpu);
-	uint16_t segment = modrm_get_segment(cpu);
-	uint16_t offset = modrm_get_offset(cpu);
-	uint16_t tmp = read_word(cpu, segment, offset);
-	reg16_write(cpu, cpu->modrm.reg, tmp);
-	ES = read_word(cpu, segment, offset + 2);
-	TRANSFERS(2);
-	CYCLES(16);
-}
-static void lds(I8086* cpu) {
-	/* lds (C5) b11000101 */
-	fetch_modrm(cpu);
-	uint16_t segment = modrm_get_segment(cpu);
-	uint16_t offset = modrm_get_offset(cpu);
-	uint16_t tmp = read_word(cpu, segment, offset);
-	reg16_write(cpu, cpu->modrm.reg, tmp);
-	DS = read_word(cpu, segment, offset + 2);
-	TRANSFERS(2);
-	CYCLES(16);
-}
-
-static void xlat(I8086* cpu) {
-	/* Get data pointed by BX + AL (D7) b11010111 */
-	uint8_t mem = read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), BX + AL);
-	AL = mem;
-	TRANSFERS(1);
-	CYCLES(11);
-}
-
-static void esc(I8086* cpu) {
-	/* esc (D8-DF R/M reg = XXX) b11010REG */
-	fetch_modrm(cpu);
-	if (cpu->modrm.mod != 0b11) {
-		uint8_t esc_opcode = ((cpu->opcode & 7) << 3) | cpu->modrm.reg;
-		uint16_t reg = reg16_read(cpu, cpu->opcode);
-		OPERAND16 rm = modrm_get_op16(cpu);
-		(void)esc_opcode;
-		(void)reg;
-		(void)rm;
+	if (!fetch_modrm(cpu)) {
+		return;
 	}
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	uint16_t segment = modrm_get_segment(cpu);
+	uint16_t offset = 0;
+	if (!modrm_get_offset(cpu, &offset)) {
+		return;
+	}
+	uint16_t tmp = 0;
+	if (!read_word(cpu, segment, offset, &tmp)) {
+		return;
+	}
+	modrm_write_reg16(cpu, tmp);
+	read_word(cpu, segment, offset + 2, &ES);
+}
+static void lds(I80286* cpu) {
+	/* lds (C5) b11000101 */
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	uint16_t segment = modrm_get_segment(cpu);
+	uint16_t offset = 0;
+	if (!modrm_get_offset(cpu, &offset)) {
+		return;
+	}
+	uint16_t tmp = 0;
+	if (!read_word(cpu, segment, offset, &tmp)) {
+		return;
+	}
+	modrm_write_reg16(cpu, tmp);
+	read_word(cpu, segment, offset + 2, &DS);
 }
 
-static void loopnz(I8086* cpu) {
+static void xlat(I80286* cpu) {
+	/* Get data pointed by BX + AL (D7) b11010111 */
+	uint8_t mem = 0;
+	read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), BX + AL, &mem);
+	AL = mem;
+}
+
+static void esc(I80286* cpu) {
+	/* esc (D8-DF R/M reg = XXX) b11010REG */
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	uint8_t esc_opcode = ((cpu->opcode & 7) << 3) | cpu->modrm.u.bits.reg;
+	uint16_t reg = reg16_read(cpu, cpu->opcode);
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+	if (rm.is_reg == 0 && rm.u.mem.offset == 0xFFFF) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+	(void)esc_opcode;
+	(void)reg;
+	(void)rm;
+}
+
+static void loopnz(I80286* cpu) {
 	/* loop while not zero (E0) b1110000Z */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	uint16_t se = sign_extend8_16(imm);
 	CX -= 1;
 	if (CX && !ZF) {
 		IP += se;
-		CYCLES(19);
-	}
-	else {
-		CYCLES(5);
 	}
 }
-static void loopz(I8086* cpu) {
+static void loopz(I80286* cpu) {
 	/* loop while zero (E1) b1110000Z */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	uint16_t se = sign_extend8_16(imm);
 	CX -= 1;
 	if (CX && ZF) {
 		IP += se;
-		CYCLES(18);
-	}
-	else {
-		CYCLES(6);
 	}
 }
-static void loop(I8086* cpu) {
+static void loop(I80286* cpu) {
 	/* loop if CX not zero (E2) b11100010 */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	uint16_t se = sign_extend8_16(imm);
 	CX -= 1;
 	if (CX) {
 		IP += se;
-		CYCLES(17);
-	}
-	else {
-		CYCLES(5);
 	}
 }
 
-static void in_accum_imm(I8086* cpu) {
+static void in_accum_imm(I80286* cpu) {
 	/* in AL/AX, imm */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	if (W) {
 		AX = (READ_IO_BYTE(imm) | (READ_IO_BYTE(imm + 1) << 8));
 	}
 	else {
 		AL = READ_IO_BYTE(imm);
 	}
-	TRANSFERS(1);
-	CYCLES(10);
 }
-static void out_accum_imm(I8086* cpu) {
+static void out_accum_imm(I80286* cpu) {
 	/* out imm, AL/AX */
-	uint8_t imm = fetch_byte(cpu);
+	uint8_t imm = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
 	if (W) {
 		WRITE_IO_BYTE(imm, AL);
 		WRITE_IO_BYTE(imm + 1, AH);
@@ -2402,10 +3215,8 @@ static void out_accum_imm(I8086* cpu) {
 	else {
 		WRITE_IO_BYTE(imm, AL);
 	}
-	TRANSFERS(1);
-	CYCLES(10);
 }
-static void in_accum_dx(I8086* cpu) {
+static void in_accum_dx(I80286* cpu) {
 	/* in AL/AX, DX */
 	if (W) {
 		AX = (READ_IO_BYTE(DX) | (READ_IO_BYTE(DX + 1) << 8));
@@ -2413,10 +3224,8 @@ static void in_accum_dx(I8086* cpu) {
 	else {
 		AL = READ_IO_BYTE(DX);
 	}
-	TRANSFERS(1);
-	CYCLES(8);
 }
-static void out_accum_dx(I8086* cpu) {
+static void out_accum_dx(I80286* cpu) {
 	/* out DX, AL/AX */
 	if (W) {
 		WRITE_IO_BYTE(DX, AL);
@@ -2425,114 +3234,624 @@ static void out_accum_dx(I8086* cpu) {
 	else {
 		WRITE_IO_BYTE(DX, AL);
 	}
-	TRANSFERS(1);
-	CYCLES(8);
 }
 
-static void int_(I8086* cpu) {
+static void int_(I80286* cpu) {
 	/* interrupt CD b11001101 */	
-	uint8_t type = fetch_byte(cpu);
-	i8086_int(cpu, type);
-	TRANSFERS(5);
-	CYCLES(51);	
+	uint8_t type = 0;
+	if (!fetch_byte(cpu, &type)) {
+		return;
+	}
+	i80286_int(cpu, type);
 }
-static void int3(I8086* cpu) {
+static void int3(I80286* cpu) {
 	/* interrupt CC b11001100 */
-	i8086_int(cpu, INT_3);
-	TRANSFERS(5);
-	CYCLES(52);
+	i80286_int(cpu, INT_3);
 }
-static void into(I8086* cpu) {
+static void into(I80286* cpu) {
 	/* interrupt on overflow (CE) b11001110 */
 	if (OF) {
-		i8086_int(cpu, INT_OVERFLOW);
-		TRANSFERS(5);
-		CYCLES(53);
-	}
-	else {
-		CYCLES(4);
+		i80286_int(cpu, INT_OVERFLOW);
 	}
 }
-static void iret(I8086* cpu) {
+static void iret(I80286* cpu) {
 	/* return from interrupt (CF) b11001111 */
 	pop_word(cpu, &IP);
 	pop_word(cpu, &CS);
 	uint16_t psw = 0;
 	pop_word(cpu, &psw);
-	PSW = (psw | 0xF002) & 0xFFD7;
-	TRANSFERS(3);
-	CYCLES(24);
+	PSW = (psw | 0x0002) & 0x0FD7;
+}
+
+static void bound(I80286* cpu) {
+	/* bound (62) b01100010 */
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	uint16_t reg = modrm_read_reg16(cpu);
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+
+	if (rm.is_reg) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+	else if (rm.u.mem.offset == 0xFFFF || rm.u.mem.offset == 0xFFFD) { /* 286: Only 0xFFFD and 0xFFFF cause #GP */
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	uint16_t low = 0;
+	uint16_t high = 0;
+	modrm_read_rm16(cpu, rm, &low);
+	rm.u.mem.offset += 2;
+	modrm_read_rm16(cpu, rm, &high);
+
+	if ((int16_t)reg < (int16_t)low || (int16_t)reg >(int16_t)high) {
+		i80286_exception(cpu, INT_BOUNDS);
+	}
+}
+
+static int get_descriptor_table(I80286* cpu, uint16_t selector, I80286_DESCRIPTOR* descriptor) {
+	uint16_t index = selector >> 0x03;
+	int ti = selector & 0x04;
+	uint24_t base = 0;
+
+	if (ti) {
+		/* LDT */
+		if (index * 8 >= cpu->ldt.descriptor.limit) {
+			i80286_exception(cpu, EXCEPTION_GP);
+			return 0;
+		}
+		base = cpu->ldt.descriptor.base;
+	}
+	else {
+		/* GDT */
+		if (index * 8 >= cpu->gdtr.limit) {
+			i80286_exception(cpu, EXCEPTION_GP);
+			return 0;
+		}
+		base = cpu->gdtr.base;
+	}
+
+	uint24_t address = base + (index * 8);
+
+	uint16_t limit = 0;
+	uint16_t base_lo = 0;
+	uint8_t  base_hi = 0;
+	read_word_linear(cpu, address, &limit);
+	read_word_linear(cpu, address + 2, &base_lo);
+	read_byte_linear(cpu, address + 4, &base_hi);
+
+	descriptor->base = (uint24_t)base_lo | (base_hi << 16);
+	descriptor->limit = limit;
+	return 1;
+}
+
+static void sldt(I80286* cpu) {
+	/* 0F 00 /0 */
+}
+
+static void str(I80286* cpu) {
+	/* 0F 00 /1 */
+}
+
+static void lldt(I80286* cpu) {
+	/* 0F 00 /2 */
+}
+
+static void ltr(I80286* cpu) {
+	/* 0F 00 /3 - Load task register */
+
+	if (!cpu->msw.u.bits.pe) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+}
+
+static void verr(I80286* cpu) {
+	/* 0F 00 /4 */
+}
+
+static void verw(I80286* cpu) {
+	/* 0F 00 /5 */
+}
+
+
+static void sgdt(I80286* cpu) {
+	/* 0F 01 /0 */
+
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	uint16_t offset = 0;
+	uint16_t segment = 0;
+	modrm_get_offset(cpu, &offset);
+	segment = modrm_get_segment(cpu);
+
+	uint16_t limit = cpu->gdtr.limit;
+	uint16_t base_lo = (uint16_t)(cpu->gdtr.base & 0xFFFF);
+	uint8_t  base_hi = (uint8_t)((cpu->gdtr.base >> 16) & 0xFF);
+
+	if (!write_word(cpu, segment, offset + 0, limit)) {
+		return;
+	}
+	if (!write_word(cpu, segment, offset + 2, base_lo)) {
+		return;
+	}
+	if (!write_byte(cpu, segment, offset + 4, base_hi)) {
+		return;
+	}
+}
+
+static void sidt(I80286* cpu) {
+	/* 0F 01 /1 */	
+	
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	uint16_t offset = 0;
+	uint16_t segment = 0;
+	modrm_get_offset(cpu, &offset);
+	segment = modrm_get_segment(cpu);
+
+	uint16_t limit = cpu->idtr.limit;
+	uint16_t base_lo = (uint16_t)(cpu->idtr.base & 0xFFFF);
+	uint8_t  base_hi = (uint8_t)((cpu->idtr.base >> 16) & 0xFF);
+
+	if (!write_word(cpu, segment, offset + 0, limit)) {
+		return;
+	}
+	if (!write_word(cpu, segment, offset + 2, base_lo)) {
+		return;
+	}
+	if (!write_byte(cpu, segment, offset + 4, base_hi)) {
+		return;
+	}
+}
+
+static void lgdt(I80286* cpu) {
+	/* 0F 01 /2 */
+
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->msw.u.bits.pe && cpu->cpl > 0) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	uint16_t limit = 0;
+	uint16_t base_lo = 0;
+	uint8_t base_hi = 0;
+
+	uint16_t offset = 0;
+	uint16_t segment = 0;
+	modrm_get_offset(cpu, &offset);
+	segment = modrm_get_segment(cpu);
+
+	if (!read_word(cpu, segment, offset, &limit)) {
+		return;
+	}
+	if (!read_word(cpu, segment, offset + 2, &base_lo)) {
+		return;
+	}
+	if (!read_byte(cpu, segment, offset + 4, &base_hi)) {
+		return;
+	}
+
+	cpu->gdtr.base = (uint24_t)base_lo | (base_hi << 16);
+	cpu->gdtr.limit = limit;
+}
+
+static void lidt(I80286* cpu) {
+	/* 0F 01 /3 */
+
+	if (cpu->modrm.u.bits.mod == 0b11) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->msw.u.bits.pe && cpu->cpl > 0) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	uint16_t limit = 0;
+	uint16_t base_lo = 0;
+	uint8_t base_hi = 0;
+
+	uint16_t offset = 0;
+	uint16_t segment = 0;
+	modrm_get_offset(cpu, &offset);
+	segment = modrm_get_segment(cpu);
+
+	if (!read_word(cpu, segment, offset, &limit)) {
+		return;
+	}
+	if (!read_word(cpu, segment, offset + 2, &base_lo)) {
+		return;
+	}
+	if (!read_byte(cpu, segment, offset + 4, &base_hi)) {
+		return;
+	}
+
+	cpu->idtr.base = (uint24_t)base_lo | (base_hi << 16);
+	cpu->idtr.limit = limit;
+}
+
+static void smsw(I80286* cpu) {
+	/* 0F 01 /4 */
+
+	OPERAND16 rm = { 0 };
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+
+	modrm_write_rm16(cpu, rm, cpu->msw.u.word);
+}
+
+static void lmsw(I80286* cpu) {
+	/* 0F 01 /6 */
+
+	OPERAND16 rm = { 0 };
+	uint16_t msw = 0;
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+
+	if (!modrm_read_rm16(cpu, rm, &msw)) {
+		return;
+	}
+
+	cpu->msw.u.word = (cpu->msw.u.word & 0x1) | msw;
+}
+
+static void lar(I80286* cpu) {
+	/* 0F 02 /r - Load access rights */
+
+	ZF = 0;
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+
+	if (!cpu->msw.u.bits.pe) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	OPERAND16 rm = { 0 };
+	uint16_t selector = 0;
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+
+	if (!modrm_read_rm16(cpu, rm, &selector)) {
+		return;
+	}
+
+	if (selector == 0) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	I80286_DESCRIPTOR descriptor = { 0 };
+	if (!get_descriptor_table(cpu, selector, &descriptor)) {
+		return;
+	}
+
+	uint8_t dpl = (descriptor.access >> 5) & 3;
+	if (dpl < cpu->cpl) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	modrm_write_reg16(cpu, descriptor.access);
+	ZF = 1;
+}
+
+static void lsl(I80286* cpu) {
+	/* 0F 03 /r - Load segment limit */
+
+	ZF = 0;
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+
+	if (!cpu->msw.u.bits.pe) {
+		i80286_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	OPERAND16 rm = { 0 };
+	uint16_t selector = 0;
+	if (!modrm_get_rm16(cpu, &rm)) {
+		return;
+	}
+
+	if (!modrm_read_rm16(cpu, rm, &selector)){
+		return;
+	}
+
+	if (selector == 0) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	I80286_DESCRIPTOR descriptor = { 0 };
+	if (!get_descriptor_table(cpu, selector, &descriptor)) {
+		return;
+	}
+	
+	uint8_t dpl = (descriptor.access >> 5) & 3;
+	if (dpl < cpu->cpl) {
+		i80286_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	modrm_write_reg16(cpu, descriptor.limit);
+	ZF = 1;
+}
+
+static void loadall_cache(I80286* cpu, uint16_t segment, uint16_t address, I80286_DESCRIPTOR* descriptor) {
+	uint8_t v1 = 0;
+	uint8_t v2 = 0;
+	uint8_t v3 = 0;
+	read_byte(cpu, segment, address, &v1);
+	read_byte(cpu, segment, address+1, &v2);
+	read_byte(cpu, segment, address+2, &v3);
+	descriptor->base = (uint24_t)v1 | (v2 << 8) | (v3 << 16);
+
+	read_byte(cpu, segment, address+3, &v1);
+	descriptor->access = v1;
+
+	read_byte(cpu, segment, address + 4, &v1);
+	read_byte(cpu, segment, address + 5, &v2);
+	descriptor->limit = (uint16_t)v1 | (v2 << 8);
+}
+static void loadall(I80286* cpu) {
+	/* 0F 05 - load all */
+
+	/* LOADALL reads a 102 byte area of physical memory starting at physical memory location 000800H.
+	The entire execution state of the 80286 is defined upon completion of this instruction. 
+	The descriptor cache registers for the ES, DS, SS, CS, TR, and LDT are directly loaded from this area. */
+	
+	read_word(cpu, 0x0000, 0x0806, &MSW);
+	read_word(cpu, 0x0000, 0x0816, &TR);
+	read_word(cpu, 0x0000, 0x0818, &PSW);
+	read_word(cpu, 0x0000, 0x081A, &IP);
+	read_word(cpu, 0x0000, 0x081C, &LDT);
+	read_word(cpu, 0x0000, 0x081E, &DS);
+	read_word(cpu, 0x0000, 0x0820, &SS);
+	read_word(cpu, 0x0000, 0x0822, &CS);
+	read_word(cpu, 0x0000, 0x0824, &ES);
+	read_word(cpu, 0x0000, 0x0826, &DI);
+	read_word(cpu, 0x0000, 0x0828, &SI);
+	read_word(cpu, 0x0000, 0x082A, &BP);
+	read_word(cpu, 0x0000, 0x082C, &SP);
+	read_word(cpu, 0x0000, 0x082E, &BX);
+	read_word(cpu, 0x0000, 0x0830, &DX);
+	read_word(cpu, 0x0000, 0x0832, &CX);
+	read_word(cpu, 0x0000, 0x0834, &AX);	
+	loadall_cache(cpu, 0x0000, 0x0836, &ES_CACHE);
+	loadall_cache(cpu, 0x0000, 0x083C, &CS_CACHE);
+	loadall_cache(cpu, 0x0000, 0x0842, &SS_CACHE);
+	loadall_cache(cpu, 0x0000, 0x0848, &DS_CACHE);
+	loadall_cache(cpu, 0x0000, 0x084E, &GDTR);
+	loadall_cache(cpu, 0x0000, 0x0854, &LDT_CACHE);
+	loadall_cache(cpu, 0x0000, 0x085A, &IDTR);
+	loadall_cache(cpu, 0x0000, 0x0860, &TSS);
+}
+
+static void clts(I80286* cpu) {
+	/* 0F 06 */
+	cpu->msw.u.bits.ts = 0;
+}
+
+static void arpl(I80286* cpu) {
+	/* 63 /r */
 }
 
 /* prefix byte */
-static int rep(I8086* cpu) {
+static int rep(I80286* cpu) {
 	/* rep/repz/repnz (F2/F3) b1111001Z */
 	cpu->internal_flags |= INTERNAL_FLAG_F1;    /* Set F1 */
 	cpu->internal_flags &= ~INTERNAL_FLAG_F1Z;  /* Clr F1Z */
 	cpu->internal_flags |= (cpu->opcode & 0x1); /* Set F1Z */
-	
-	cpu->opcode = fetch_byte(cpu);
-	CYCLES(9);
-	return I8086_DECODE_REQ_CYCLE;
+
+	cpu->opcode = 0;
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return I80286_DECODE_OK;
+	}
+	return I80286_DECODE_REQ_CYCLE;
 }
-static int segment_override(I8086* cpu) {
+static int segment_override(I80286* cpu) {
 	/* (26/2E/36/3E) b001SR110 */
 	cpu->segment_prefix = SR;
-	cpu->opcode = fetch_byte(cpu);
-	CYCLES(2);
-	return I8086_DECODE_REQ_CYCLE;
+	cpu->opcode = 0;
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return I80286_DECODE_OK;
+	}
+	return I80286_DECODE_REQ_CYCLE;
 }
-static int lock(I8086* cpu) {
+static int lock(I80286* cpu) {
 	/* lock the bus (F0/F1) b11110000 */
-	cpu->opcode = fetch_byte(cpu);
-	CYCLES(2);
-	return I8086_DECODE_REQ_CYCLE;
+	cpu->lock_prefix = 1;
+	cpu->opcode = 0;
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return I80286_DECODE_OK;
+	}
+	return I80286_DECODE_REQ_CYCLE;
 }
 
 /* Fetch next opcode */
-static void i8086_fetch(I8086* cpu) {
+static void i80286_fetch(I80286* cpu) {
 	cpu->internal_flags = 0;
-	cpu->modrm.byte = 0;
+	cpu->modrm.u.byte = 0;
 	cpu->segment_prefix = 0xFF;
+	cpu->lock_prefix = 0;
 	cpu->instruction_len = 0;
-	cpu->opcode = fetch_byte(cpu);
+	cpu->opcode = 0;
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return;
+	}
 }
 
 /* decode opcode */
-static void i8086_decode_opcode_80(I8086* cpu) {
+static void i80286_decode_opcode_0f(I80286* cpu) {
+	/* 0x0F XX */
+	if (!fetch_byte(cpu, &cpu->opcode)){
+		return;
+	}
+
+	switch (cpu->opcode) {
+		case 0x00:
+			if (!fetch_modrm(cpu)) {
+				return;
+			}
+
+			switch (cpu->modrm.u.bits.reg) {
+				case 0b000:
+					sldt(cpu);
+					break;
+				case 0b001:
+					str(cpu);
+					break;
+				case 0b010:
+					lldt(cpu);
+					break;
+				case 0b011:
+					ltr(cpu);
+					break;
+				case 0b100:
+					verr(cpu);
+					break;
+				case 0b101:
+					verw(cpu);
+					break;
+			}
+			break;
+
+		case 0x01:
+			if (!fetch_modrm(cpu)) {
+				return;
+			}
+
+			switch (cpu->modrm.u.bits.reg) {
+				case 0b000:
+					sgdt(cpu);
+					break;
+				case 0b001:
+					sidt(cpu);
+					break;
+				case 0b010:
+					lgdt(cpu);
+					break;
+				case 0b011:
+					lidt(cpu);
+					break;
+				case 0b100:
+					smsw(cpu);
+					break;
+				case 0b110:
+					lmsw(cpu);
+					break;
+			}
+			break;
+
+		case 0x02:
+			lar(cpu);
+			break;
+		case 0x03:
+			lsl(cpu);
+			break;
+		case 0x05:
+			loadall(cpu);
+			break;
+		case 0x06:
+			clts(cpu);
+			break;
+	}
+}
+static void i80286_decode_opcode_80(I80286* cpu) {
 	/* 0x80 - 0x83 b100000SW (Immed) */
-	fetch_modrm(cpu);
-	switch (cpu->modrm.reg) {
-		case 0b000: // ADD
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	switch (cpu->modrm.u.bits.reg) {
+		case 0b000: /* ADD */
 			add_rm_imm(cpu);
 			break;
-		case 0b001: // OR
+		case 0b001: /* OR */
 			or_rm_imm(cpu);
 			break;
-		case 0b010: // ADC
+		case 0b010: /* ADC */
 			adc_rm_imm(cpu);
 			break;
-		case 0b011: // SBB
+		case 0b011: /* SBB */
 			sbb_rm_imm(cpu);
 			break;
-		case 0b100: // AND
+		case 0b100: /* AND */
 			and_rm_imm(cpu);
 			break;
-		case 0b101: // SUB
+		case 0b101: /* SUB */
 			sub_rm_imm(cpu);
 			break;
-		case 0b110: // XOR
+		case 0b110: /* XOR */
 			xor_rm_imm(cpu);
 			break;
-		case 0b111: // CMP
+		case 0b111: /* CMP */
 			cmp_rm_imm(cpu);
 			break;
 	}
 }
-static void i8086_decode_opcode_d0(I8086* cpu) {
+static void i80286_decode_opcode_c0(I80286* cpu) {
+	/* 0xC0 - 0xC1 b1100000W (Shift Imm) */
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	switch (cpu->modrm.u.bits.reg) {
+		case 0b000:
+			rol_rm_imm(cpu);
+			break;
+		case 0b001:
+			ror_rm_imm(cpu);
+			break;
+		case 0b010:
+			rcl_rm_imm(cpu);
+			break;
+		case 0b011:
+			rcr_rm_imm(cpu);
+			break;
+		case 0b100:
+			shl_rm_imm(cpu);
+			break;
+		case 0b101:
+			shr_rm_imm(cpu);
+			break;
+		case 0b110:
+			sal_rm_imm(cpu);
+			break;
+		case 0b111:
+			sar_rm_imm(cpu);
+			break;
+	}
+}
+static void i80286_decode_opcode_d0(I80286* cpu) {
 	/* 0xD0 - 0xD3 b110100VW (Shift) */
-	fetch_modrm(cpu);
-	switch (cpu->modrm.reg) {
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	switch (cpu->modrm.u.bits.reg) {
 		case 0b000:
 			rol(cpu);
 			break;
@@ -2551,18 +3870,20 @@ static void i8086_decode_opcode_d0(I8086* cpu) {
 		case 0b101:
 			shr(cpu);
 			break;
-		case 0b110: /* 8086 undocumented; Set Minus One (-1) */
-			setmo(cpu);
+		case 0b110:
+			sal(cpu);
 			break;
 		case 0b111:
 			sar(cpu);
 			break;
 	}
 }
-static void i8086_decode_opcode_f6(I8086* cpu) {
+static void i80286_decode_opcode_f6(I80286* cpu) {
 	/* F6/F7 b1111011W (Group 1) */
-	fetch_modrm(cpu);
-	switch (cpu->modrm.reg) {
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	switch (cpu->modrm.u.bits.reg) {
 		case 0b000:
 			test_rm_imm(cpu);
 			break;
@@ -2589,37 +3910,62 @@ static void i8086_decode_opcode_f6(I8086* cpu) {
 			break;
 	}
 }
-static int i8086_decode_opcode_fe(I8086* cpu) {
+static void i80286_decode_opcode_fe(I80286* cpu) {
 	/* FE/FF b1111111W (Group 2) */
-	fetch_modrm(cpu);
-	switch (cpu->modrm.reg) {
-		case 0b000:
-			inc_rm(cpu);
-			break;
-		case 0b001:
-			dec_rm(cpu);
-			break;
-		case 0b010:
-			call_intra_indirect(cpu);
-			break;
-		case 0b011:
-			return call_inter_indirect(cpu);
-		case 0b100:
-			jmp_intra_indirect(cpu);
-			break;
-		case 0b101:
-			return jmp_inter_indirect(cpu);
-		case 0b110:
-			push_rm(cpu);
-			break;
-		case 0b111: /* 8086 undocumented; Decodes identically to b110 */
-			push_rm(cpu);
-			break;
+	if (!fetch_modrm(cpu)) {
+		return;
 	}
-	return I8086_DECODE_OK;
+	if (W) {
+		switch (cpu->modrm.u.bits.reg) {
+			case 0b000:
+				inc_rm(cpu);
+				break;
+			case 0b001:
+				dec_rm(cpu);
+				break;
+			case 0b010:
+				call_intra_indirect(cpu);
+				break;
+			case 0b011:
+				call_inter_indirect(cpu);
+				break;
+			case 0b100:
+				jmp_intra_indirect(cpu);
+				break;
+			case 0b101:
+				jmp_inter_indirect(cpu);
+				break;
+			case 0b110:
+				push_rm(cpu);
+				break;
+			case 0b111: /* 8086 undocumented; Decodes identically to b110 */
+				push_rm(cpu);
+				break;
+		}
+	}
+	else {
+		switch (cpu->modrm.u.bits.reg) {
+			case 0b000:
+				inc_rm(cpu);
+				break;
+			case 0b001:
+				dec_rm(cpu);
+				break;
+
+			case 0b010:
+			case 0b011:
+			case 0b100:
+			case 0b101:
+			case 0b110:
+			case 0b111:
+				i80286_exception(cpu, EXCEPTION_UD);
+				break;
+		}
+	}
+	return;
 }
 
-static int i8086_decode_opcode(I8086* cpu) {
+static int i80286_decode_opcode(I80286* cpu) {
 	switch (cpu->opcode) {
 		case 0x00:
 		case 0x01:
@@ -2650,8 +3996,8 @@ static int i8086_decode_opcode(I8086* cpu) {
 		case 0x0E:
 			push_seg(cpu);
 			break;
-		case 0x0F: /* pop cs; 8086 undocumented */
-			pop_seg(cpu);
+		case 0x0F:
+			i80286_decode_opcode_0f(cpu);
 			break;
 		
 		case 0x10:
@@ -2793,24 +4139,45 @@ static int i8086_decode_opcode(I8086* cpu) {
 			pop_reg(cpu);
 			break;
 
-		/* 8086 undocumented; 0x60-0x6F decodes identically to 0x70-0x7F on 8086 (b111X CCCC) */
 		case 0x60:
+			pusha(cpu);
+			break;
 		case 0x61:
+			popa(cpu);
+			break;
 		case 0x62:
+			bound(cpu);
+			break;
 		case 0x63:
+			arpl(cpu);
+			break;
 		case 0x64:
+			break;
 		case 0x65:
+			break;
 		case 0x66:
+			break;
 		case 0x67:
+			break;
 		case 0x68:
+			push_imm(cpu);
+			break;
 		case 0x69:
+			imul_rm_imm(cpu);
+			break;
 		case 0x6A:
+			push_imm(cpu);
+			break;
 		case 0x6B:
+			imul_rm_imm(cpu);
+			break;
 		case 0x6C:
 		case 0x6D:
+			ins(cpu);
+			break;
 		case 0x6E:
 		case 0x6F:
-			jcc(cpu);
+			outs(cpu);
 			break;
 
 		case 0x70:
@@ -2836,7 +4203,7 @@ static int i8086_decode_opcode(I8086* cpu) {
 		case 0x81:
 		case 0x82:
 		case 0x83:
-			i8086_decode_opcode_80(cpu);
+			i80286_decode_opcode_80(cpu);
 			break;
 		case 0x84:
 		case 0x85:
@@ -2910,23 +4277,28 @@ static int i8086_decode_opcode(I8086* cpu) {
 			break;
 		case 0xA4:
 		case 0xA5:
-			return movs(cpu);
+			movs(cpu);
+			break;
 		case 0xA6:
 		case 0xA7:
-			return cmps(cpu);
+			cmps(cpu);
+			break;
 		case 0xA8:
 		case 0xA9:
 			test_accum_imm(cpu);
 			break;
 		case 0xAA:
 		case 0xAB:
-			return stos(cpu);
+			stos(cpu);
+			break;
 		case 0xAC:
 		case 0xAD:
-			return lods(cpu);
+			lods(cpu);
+			break;
 		case 0xAE:
 		case 0xAF:
-			return scas(cpu);
+			scas(cpu);
+			break;
 
 		case 0xB0:
 		case 0xB1:
@@ -2947,11 +4319,13 @@ static int i8086_decode_opcode(I8086* cpu) {
 			mov_reg_imm(cpu);
 			break;
 
-		case 0xC0: /* 8086 undocumented; on 8086 0xC0 decodes identically to 0xC2 (b1100 00X0) */
+		case 0xC0:
+		case 0xC1:
+			i80286_decode_opcode_c0(cpu);
+			break;
 		case 0xC2:
 			ret_intra_add_imm(cpu);
 			break;
-		case 0xC1: /* 8086 undocumented; on 8086 0xC1 decodes identically to 0xC3 (b1100 00X1) */
 		case 0xC3:
 			ret_intra(cpu);
 			break;
@@ -2965,11 +4339,15 @@ static int i8086_decode_opcode(I8086* cpu) {
 		case 0xC7:
 			mov_rm_imm(cpu);
 			break;
-		case 0xC8: /* 8086 undocumented; on 8086 0xC8 decodes identically to 0xCA (b1100 10X0) */
+		case 0xC8:
+			enter(cpu);
+			break;
+		case 0xC9:
+			leave(cpu);
+			break;
 		case 0xCA:
 			ret_inter_add_imm(cpu);
 			break;
-		case 0xC9: /* 8086 undocumented; on 8086 0xC9 decodes identically to 0xCB (b1100 10X1) */
 		case 0xCB:
 			ret_inter(cpu);
 			break;
@@ -2990,7 +4368,7 @@ static int i8086_decode_opcode(I8086* cpu) {
 		case 0xD1:
 		case 0xD2:
 		case 0xD3:
-			i8086_decode_opcode_d0(cpu);
+			i80286_decode_opcode_d0(cpu);
 			break;
 		case 0xD4:
 			aam(cpu);
@@ -2998,7 +4376,7 @@ static int i8086_decode_opcode(I8086* cpu) {
 		case 0xD5:
 			aad(cpu);
 			break;
-		case 0xD6: /* 8086 undocumented; Set AL to Carry */
+		case 0xD6: /* 80286 undocumented; Set AL to Carry */
 			salc(cpu);
 			break;
 		case 0xD7:
@@ -3070,7 +4448,7 @@ static int i8086_decode_opcode(I8086* cpu) {
 			break;
 		case 0xF6:
 		case 0xF7:
-			i8086_decode_opcode_f6(cpu);
+			i80286_decode_opcode_f6(cpu);
 			break;
 		case 0xF8:
 			clc(cpu);
@@ -3092,48 +4470,48 @@ static int i8086_decode_opcode(I8086* cpu) {
 			break;
 		case 0xFE:
 		case 0xFF:
-			return i8086_decode_opcode_fe(cpu);
+			i80286_decode_opcode_fe(cpu);
+			break;
 	}
-	return I8086_DECODE_OK;
+	return I80286_DECODE_OK;
 }
 
-static int i8086_decode_instruction(I8086* cpu) {
+static int i80286_decode_instruction(I80286* cpu) {
 	int r = 0;
 	do {
-		r = i8086_decode_opcode(cpu);
-	} while (r == I8086_DECODE_REQ_CYCLE);
+		r = i80286_decode_opcode(cpu);
+	} while (r == I80286_DECODE_REQ_CYCLE);
 	return r;
 }
 
-void i8086_init(I8086* cpu) {
+void i80286_init(I80286* cpu) {
 	cpu->funcs.read_mem_byte = NULL;
 	cpu->funcs.write_mem_byte = NULL;
 	cpu->funcs.read_io_byte = NULL;
 	cpu->funcs.write_io_byte = NULL;
-
-#ifdef I8086_ENABLE_INTERRUPT_HOOKS
-	cpu->int_cb_count = 0;
-	for (int i = 0; i < I8086_MAX_CB; ++i) {
-		cpu->int_cb[i].type = 0;
-		cpu->int_cb[i].cb = NULL;
-	}
-#endif
 }
-void i8086_reset(I8086* cpu) {
-	for (int i = 0; i < I8086_REGISTER_COUNT; ++i) {
-		cpu->registers[i].r16 = 0;
+void i80286_reset(I80286* cpu) {
+	for (int i = 0; i < I80286_REGISTER_COUNT; ++i) {
+		cpu->registers[i].u.r16 = 0;
 	}
 
-	for (int i = 0; i < I8086_SEGMENT_COUNT; ++i) {
-		cpu->segments[i] = 0;
+	for (int i = 0; i < I80286_SEGMENT_COUNT; ++i) {
+		cpu->segments[i].selector = 0;
+		cpu->segments[i].descriptor.limit = 0xFFFF;
+		cpu->segments[i].descriptor.base = 0x000000;
 	}
 
-	IP = 0;
-	CS = 0xFFFF;
+	cpu->idtr.base = 0x000000;
+	cpu->idtr.limit = 0x03FF;
 
-	PSW = 0;
+	IP = 0xFFF0;
+	CS = 0xF000;
+	CS_CACHE.base = 0xFF0000;
+	PSW = 0x2;
+	MSW = 0xFFF0;
+
 	cpu->opcode = 0;
-	cpu->modrm.byte = 0;
+	cpu->modrm.u.byte = 0;
 	cpu->cycles = 0;
 	cpu->internal_flags = 0;
 	cpu->segment_prefix = 0xFF;
@@ -3141,62 +4519,21 @@ void i8086_reset(I8086* cpu) {
 
 	cpu->intr = 0;
 	cpu->nmi = 0;
-
-	cpu->ea_offset = 0;
-	cpu->ea_segment = 0;
-	
+		
 	cpu->tf_latch = 0;
 	cpu->int_latch = 0;
 	cpu->int_delay = 0;
 	cpu->intr_type = 0;
+	cpu->halt = 0;
 }
 
-int i8086_execute(I8086* cpu) {
-	i8086_check_interrupts(cpu);
-	i8086_fetch(cpu);	 
-	return i8086_decode_instruction(cpu);
+int i80286_execute(I80286* cpu) {
+	i80286_check_interrupts(cpu);
+	i80286_check_halt(cpu);
+	i80286_fetch(cpu);
+	return i80286_decode_instruction(cpu);
 }
 
-#ifdef I8086_ENABLE_INTERRUPT_HOOKS
-void i8086_set_interrupt_cb(I8086* cpu, I8086_INT_CB hook, uint8_t type) {
-	// Replace if hook on interrupt type is already present
-	for (uint8_t i = 0; i < cpu->int_cb_count; ++i) {
-		if (cpu->int_cb[i].type == type) {
-			cpu->int_cb[i].cb = hook;
-			return;
-		}
-	}
-	// Add new if space
-	if (cpu->int_cb_count < I8086_MAX_CB) {
-		cpu->int_cb[cpu->int_cb_count].type = type;
-		cpu->int_cb[cpu->int_cb_count].cb = hook;
-		cpu->int_cb_count++;
-	}
-	else {
-		// hooks are full.
-	}
-}
-void i8086_remove_interrupt_cb(I8086* cpu, uint8_t type) {
-
-	for (uint8_t i = 0; i < cpu->int_cb_count; ++i) {
-		if (cpu->int_cb[i].type == type) {
-			// Move last entry to this slot
-			cpu->int_cb[i] = cpu->int_cb[cpu->int_cb_count - 1];
-			cpu->int_cb_count--;
-			return;
-		}
-	}
-}
-I8086_INT_CB i8086_find_interrupt_cb(I8086* cpu, uint8_t type) {
-	for (uint8_t i = 0; i < cpu->int_cb_count; ++i) {
-		if (cpu->int_cb[i].type == type) {
-			return cpu->int_cb[i].cb;
-		}
-	}
-	return NULL;
-}
-#endif
-
-uint20_t i8086_get_physical_address(uint16_t segment, uint16_t address) {
-	return (((uint20_t)segment << 4) + address) & 0xFFFFF;
+uint24_t i80286_get_physical_address(uint16_t segment, uint16_t address) {
+	return (((uint24_t)segment << 4) + address) & 0xFFFFFF;
 }
