@@ -137,6 +137,7 @@
     <ClCompile Include="..\src\i80386_mnem.c" />
     <ClCompile Include="..\src\i80386.c" />
     <ClCompile Include="..\src\i80386_alu.c" />
+    <ClInclude Include="..\src\opcode_bits.h" />
     <ClCompile Include="..\src\sign_extend.c" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
