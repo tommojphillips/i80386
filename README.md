@@ -1,9 +1,9 @@
-# I80286
+# I80386
 
-Intel 80286 CPU Interpreter written in C. This started out as an Intel 8086 CPU Interpreter. Only real-mode is implemented. There isn't much software that is built for protected mode so there is little motivation to implement it. I have moved on to the i80386.
+Intel 80386 CPU Interpreter written in C. Started out as an Intel 8086 CPU, updating it to i80386. WIP.
 
-Passes **all** I80286 hardware-generated **real mode** single step tests
-  - See: [SingleStepTests/80286](https://github.com/SingleStepTests/80286) (v1_real_mode)
+Passes **some** hardware-generated i80386 **real mode** single step tests
+  - See: [SingleStepTests/80386](https://github.com/SingleStepTests/80386) (v1_real_mode)
 
 You can run the tests yourself using the test program 
-  - See: [I80286 Test](https://github.com/tommojphillips/i80286_test)
+  - See: [I80386 Test](https://github.com/tommojphillips/i80386_test)
