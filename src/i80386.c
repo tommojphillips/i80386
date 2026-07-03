@@ -1,124 +1,21 @@
-/* i80286.c
- * Thomas J. Armytage 2025 ( https://github.com/tommojphillips/ )
- * Intel 8086 CPU
+/* i80386.c
+ * Thomas J. Armytage 2025-2026 ( https://github.com/tommojphillips/ )
+ * Intel 80386 CPU (Intel 80386EX KU80C386EX33)
  */
 
 #include <stdint.h>
 
-#include "i80286.h"
-#include "i80286_alu.h"
+#include "i80386.h"
+#include "i80386_alu.h"
 #include "sign_extend.h"
 
-#define PSW cpu->psw.u.word
-#define MSW cpu->msw.u.word
-#define NMI cpu->nmi
-#define INTR cpu->intr
+#define I80386_OPCODE cpu->opcode
+#include "opcode_bits.h"
 
-#define SF cpu->psw.u.bits.sf
-#define CF cpu->psw.u.bits.cf
-#define ZF cpu->psw.u.bits.zf
-#define PF cpu->psw.u.bits.pf
-#define OF cpu->psw.u.bits.of
-#define AF cpu->psw.u.bits.af
-#define DF cpu->psw.u.bits.df
-#define TF cpu->psw.u.bits.tf
-#define IF cpu->psw.u.bits.in
-
-#define PE cpu->msw.u.bits.pe
-#define MP cpu->msw.u.bits.mp
-#define EM cpu->msw.u.bits.em
-#define TS cpu->msw.u.bits.ts
-
-#define IP cpu->ip
-
-#define AL cpu->registers[REG_AL].u.r8.l   /* accum low byte 8bit register */
-#define AH cpu->registers[REG_AL].u.r8.h   /* accum high byte 8bit register */
-#define AX cpu->registers[REG_AX].u.r16    /* accum 16bit register */
-
-#define CL cpu->registers[REG_CL].u.r8.l   /* count low byte 8bit register */
-#define CH cpu->registers[REG_CL].u.r8.h   /* count high byte 8bit register */
-#define CX cpu->registers[REG_CX].u.r16    /* count 16bit register */
-
-#define DL cpu->registers[REG_DL].u.r8.l   /* data low byte 8bit register */
-#define DH cpu->registers[REG_DL].u.r8.h   /* data high byte 8bit register */
-#define DX cpu->registers[REG_DX].u.r16    /* data 16bit register */
-
-#define BL cpu->registers[REG_BL].u.r8.l   /* base low byte 8bit register */
-#define BH cpu->registers[REG_BL].u.r8.h   /* base high byte 8bit register */
-#define BX cpu->registers[REG_BX].u.r16    /* base 16bit register */
-
-#define SP cpu->registers[REG_SP].u.r16    /* stack pointer 16bit register */
-#define BP cpu->registers[REG_BP].u.r16    /* base pointer 16bit register */
-#define SI cpu->registers[REG_SI].u.r16    /* src index 16bit register */
-#define DI cpu->registers[REG_DI].u.r16    /* dest index 16bit register */
-
-#define ES cpu->segments[SEG_ES].selector  /* extra segment register */
-#define CS cpu->segments[SEG_CS].selector  /* code segment register */
-#define SS cpu->segments[SEG_SS].selector  /* stack segment register */
-#define DS cpu->segments[SEG_DS].selector  /* data segment register */
-
-#define ES_CACHE cpu->segments[SEG_ES].descriptor  /* extra segment register */
-#define CS_CACHE cpu->segments[SEG_CS].descriptor  /* code segment register */
-#define SS_CACHE cpu->segments[SEG_SS].descriptor  /* stack segment register */
-#define DS_CACHE cpu->segments[SEG_DS].descriptor  /* data segment register */
-
-#define LDT       cpu->ldt.selector
-#define LDT_CACHE cpu->ldt.descriptor
-
-#define IDTR      cpu->idtr
-#define GDTR      cpu->gdtr
-
-#define TR        cpu->tr
-#define TSS       cpu->tss
-
- /* byte/word operation. 0 = byte; 1 = word */
-#define W (cpu->opcode & 0x1)
-
-/* byte/word operation. 0 = byte; 1 = word */
-#define WREG (cpu->opcode & 0x8) 
-
-/* sign extend. 0 = word; 1 = byte sign extended to word */
-#define S (cpu->opcode & 0x2)
-
-/* segment register. es=b00; cs=b01; ss=b10; ds=b11 */
-#define SR ((cpu->opcode >> 0x3) & 0x3)
-
-/* 0 = (count = 1); 1 = (count = CL) */
-#define VW (cpu->opcode & 0x2)
-
-/* register direction (reg <- r/m) or (r/m <- reg) */
-#define D (cpu->opcode & 0x2) 
-
- /* Jump condition */
-#define CCCC (cpu->opcode & 0x0F)
-#define JCC_JO  0b0000
-#define JCC_JNO 0b0001
-#define JCC_JC  0b0010
-#define JCC_JNC 0b0011
-#define JCC_JZ  0b0100
-#define JCC_JNZ 0b0101
-#define JCC_JBE 0b0110
-#define JCC_JA  0b0111
-#define JCC_JS  0b1000
-#define JCC_JNS 0b1001
-#define JCC_JPE 0b1010
-#define JCC_JPO 0b1011
-#define JCC_JL  0b1100
-#define JCC_JGE 0b1101
-#define JCC_JLE 0b1110
-#define JCC_JG  0b1111
+#define _386_SIB_UNDEFINED_
 
 /* Get default or override segment index */
-#define GET_SEG_OVERRIDE(seg) ((cpu->segment_prefix != 0xFF) ? cpu->segment_prefix : seg)
-
-/* Get default or override segment register */
-#define SEG_DEFAULT_OR_OVERRIDE(seg) (cpu->segments[GET_SEG_OVERRIDE(seg)].selector)
-
-/* Read byte from IO port */
-#define READ_IO_BYTE(port) cpu->funcs.read_io_byte(port)
-
-/* Write byte to IO port */
-#define WRITE_IO_BYTE(port,value) cpu->funcs.write_io_byte(port, value)
+#define GET_SEG_OVERRIDE(seg) ((cpu->segment_override != 0xFF) ? cpu->segment_override : seg)
 
 #define INT_DBZ      0 /* ITC 0 */
 #define INT_TRAP     1 /* ITC 1 */
@@ -127,8 +24,14 @@
 #define INT_OVERFLOW 4 /* ITC 4 */
 #define INT_BOUNDS   5 /* ITC 5 */
 
-#define EXCEPTION_UD  6 /* #UD */
-#define EXCEPTION_GP 13 /* #GP */
+#define EXCEPTION_UD   6 /* #UD */
+#define EXCEPTION_DF   8 /* #DF */
+#define EXCEPTION_TS  10 /* #TS */
+#define EXCEPTION_NP  11 /* #NP */
+#define EXCEPTION_SS  12 /* #SS */
+#define EXCEPTION_GP  13 /* #GP */
+#define EXCEPTION_PF  18 /* #PF */
+#define EXCEPTION_TF 255 /* Triple Faulted */
 
 /* Internal flag F1. Signals that a rep prefix is in use for this decode cycle */
 #define F1  (cpu->internal_flags & INTERNAL_FLAG_F1)
@@ -136,1191 +39,2730 @@
 /* Internal flag F1Z. Signals which rep (repz/repnz) is in use for this decode cycle */
 #define F1Z (cpu->internal_flags & INTERNAL_FLAG_F1Z)
 
-/* 8bit r/m operand */
-typedef struct {
-	uint8_t is_reg;
-	union {
-		uint8_t reg_index;
-		struct {
-			uint16_t segment;
-			uint16_t offset;
-		} mem;
-	} u;
-} OPERAND8;
+#define RO 0 /* Readonly */
+#define RW 1 /* Read/Write */
+#define WB 1 /* Writeback */
 
-/* 16bit r/m operand */
-typedef struct {
-	uint8_t is_reg;
-	union {
-		uint8_t reg_index;
-		struct {
-			uint16_t segment;
-			uint16_t offset;
-		} mem;
-	} u;
-} OPERAND16;
+#define ZE 0 /* Zero-extend */
+#define SE 1 /* Sign-extend */
 
-void i80286_exception(I80286* cpu, uint8_t exception);
+#define SR_TYPE_DATA 0
+#define SR_TYPE_STACK 1
+#define SR_TYPE_CODE 2
+#define SR_TYPE_SYSTEM 3
 
-static int read_byte_linear(I80286* cpu, uint24_t physical_address, uint8_t* value) {
-	*value = cpu->funcs.read_mem_byte(physical_address);
-	return 1;
-}
-static int write_byte_linear(I80286* cpu, uint24_t physical_address, uint8_t value) {
-	cpu->funcs.write_mem_byte(physical_address, value);
-	return 1;
-}
+void i80386_exception(I80386* cpu, uint8_t exception);
+void i80386_exception_code(I80386* cpu, uint8_t exception, uint16_t code);
+void i80386_page_fault(I80386* cpu, uint32_t address, int present, int is_write);
 
-static int read_byte(I80286* cpu, uint16_t segment, uint16_t offset, uint8_t* value) {
-	if (offset > 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return 0;
-	}
-	*value = cpu->funcs.read_mem_byte(i80286_get_physical_address(segment, offset));
-	return 1;
-}
-static int write_byte(I80286* cpu, uint16_t segment, uint16_t offset, uint8_t value) {
-	if (offset > 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return 0;
-	}
-	cpu->funcs.write_mem_byte(i80286_get_physical_address(segment, offset), value);
-	return 1;
-}
-static int fetch_byte(I80286* cpu, uint8_t* value) {
-	read_byte(cpu, CS, IP, value);
-	IP += 1;
-	cpu->instruction_len += 1;
-	if (cpu->instruction_len > 10) {
-		i80286_exception(cpu, EXCEPTION_GP);
+static void read_dword_physical(const I80386* cpu, uint32_t address, uint32_t* value);
+static void write_dword_physical(const I80386* cpu, uint32_t address, uint32_t value);
+
+static int i80386_check_instruction_len(I80386* cpu) {
+	if (cpu->instruction_len > 15) {
+		i80386_exception(cpu, EXCEPTION_GP);
 		return 0;
 	}
 	return 1;
 }
-
-static int read_word_linear(I80286* cpu, uint24_t physical_address, uint16_t* value) {
-	*value = (((uint16_t)cpu->funcs.read_mem_byte(physical_address + 1) << 8) | cpu->funcs.read_mem_byte(physical_address));
-	return 1;
-}
-static int write_word_linear(I80286* cpu, uint24_t physical_address, uint16_t value) {
-	cpu->funcs.write_mem_byte(physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(physical_address + 1, (value >> 8) & 0xFF);
-	return 1;
-}
-
-static int read_word(I80286* cpu, uint16_t segment, uint16_t offset, uint16_t* value) {
-	if (offset >= 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return 0;
-	}
-	*value = (((uint16_t)cpu->funcs.read_mem_byte(i80286_get_physical_address(segment, offset + 1)) << 8) | cpu->funcs.read_mem_byte(i80286_get_physical_address(segment, offset)));
-	return 1;
-}
-static int write_word(I80286* cpu, uint16_t segment, uint16_t offset, uint16_t value) {
-	if (offset >= 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return 0;
-	}
-	cpu->funcs.write_mem_byte(i80286_get_physical_address(segment, offset), value & 0xFF);
-	cpu->funcs.write_mem_byte(i80286_get_physical_address(segment, offset + 1), (value >> 8) & 0xFF);
-	return 1;
-}
-static int fetch_word(I80286* cpu, uint16_t* value) {
-	read_word(cpu, CS, IP, value);
-	IP += 2;
-	cpu->instruction_len += 2;
-	if (cpu->instruction_len > 10) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return 0;
-	}
-	return 1;
-}
-
-static uint8_t reg8_read(I80286* cpu, uint8_t reg) {
-	if (reg & 0x4) {
-		return cpu->registers[reg & 0x3].u.r8.h;
-	}
-	else {
-		return cpu->registers[reg & 0x3].u.r8.l;
-	}
-}
-static void reg8_write(I80286* cpu, uint8_t reg, uint8_t v) {
-	if (reg & 0x4) {
-		cpu->registers[reg & 0x3].u.r8.h = v;
-	}
-	else {
-		cpu->registers[reg & 0x3].u.r8.l = v;
-	}
-}
-
-static uint16_t reg16_read(I80286* cpu, uint8_t reg) {
-	return cpu->registers[reg & 0x7].u.r16;
-}
-static void reg16_write(I80286* cpu, uint8_t reg, uint16_t v) {
-	cpu->registers[reg & 0x7].u.r16 = v;
-}
-
-/* Mod R/M */
-static uint16_t modrm_get_base_offset(I80286* cpu) {
-	switch (cpu->modrm.u.bits.rm) {
-		case 0b000: /* base rel indexed - BX + SI */
-			return (BX + SI);
-		case 0b001: /* base rel indexed - BX + DI */
-			return (BX + DI);
-		case 0b010: /* base rel indexed stack - BP + SI */
-			return (BP + SI);
-		case 0b011: /* base rel indexed stack - BP + DI */
-			return (BP + DI);
-		case 0b100: /* implied SI */
-			return SI;
-		case 0b101: /* implied DI */
-			return DI;
-		case 0b110: /* implied BP */
-			return BP;
-		case 0b111: /* implied BX */
-			return BX;
+static int i80386_check_condition(I80386* cpu) {
+	switch (CCCC) {
+		case JCC_JO:
+			if (cpu->psw.of) return 1;
+			break;
+		case JCC_JNO:
+			if (!cpu->psw.of) return 1;
+			break;
+		case JCC_JC:
+			if (cpu->psw.cf) return 1;
+			break;
+		case JCC_JNC:
+			if (!cpu->psw.cf) return 1;
+			break;
+		case JCC_JZ:
+			if (cpu->psw.zf) return 1;
+			break;
+		case JCC_JNZ:
+			if (!cpu->psw.zf) return 1;
+			break;
+		case JCC_JBE:
+			if (cpu->psw.cf || cpu->psw.zf) return 1;
+			break;
+		case JCC_JA:
+			if (!cpu->psw.cf && !cpu->psw.zf) return 1;
+			break;
+		case JCC_JS:
+			if (cpu->psw.sf) return 1;
+			break;
+		case JCC_JNS:
+			if (!cpu->psw.sf) return 1;
+			break;
+		case JCC_JPE:
+			if (cpu->psw.pf) return 1;
+			break;
+		case JCC_JPO:
+			if (!cpu->psw.pf) return 1;
+			break;
+		case JCC_JL:
+			if (cpu->psw.sf != cpu->psw.of) return 1;
+			break;
+		case JCC_JGE:
+			if (cpu->psw.sf == cpu->psw.of) return 1;
+			break;
+		case JCC_JLE:
+			if (cpu->psw.zf || cpu->psw.sf != cpu->psw.of) return 1;
+			break;
+		case JCC_JG:
+			if (!cpu->psw.zf && cpu->psw.sf == cpu->psw.of) return 1;
+			break;
 	}
 	return 0;
 }
-static uint16_t modrm_get_segment(I80286* cpu) {
-	if (cpu->segment_prefix != 0xFF) {
-		return cpu->segments[cpu->segment_prefix & 0x3].selector; /* CS/DS/ES/SS override */
+
+static void i80386_rollback_instruction(I80386* cpu) {
+	cpu->eip -= cpu->instruction_len;
+	cpu->instruction_len = 0;
+}
+
+static int segment_read_check(I80386* cpu, uint8_t sreg_index, uint32_t offset, uint32_t size) {
+	if (offset > cpu->segment_registers[sreg_index].desc.limit - (size - 1)) {
+		return 0;
+	}
+	if (cpu->segment_registers[sreg_index].desc.access.e && !cpu->segment_registers[sreg_index].desc.access.rw) {
+		return 0;
+	}
+	return 1;
+}
+static int segment_write_check(I80386* cpu, uint8_t sreg_index, uint32_t offset, uint32_t size) {
+	if (offset > cpu->segment_registers[sreg_index].desc.limit - (size - 1)) {
+		return 0;
+	}
+	if (cpu->segment_registers[sreg_index].desc.access.e || !cpu->segment_registers[sreg_index].desc.access.rw) {
+		return 0;
+	}
+	return 1;
+}
+
+/* 8 bit memory r/w */
+
+static int read_byte_physical(const I80386* cpu, uint32_t address, uint8_t* value) {
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, address);
+	return 1;
+}
+static int write_byte_physical(const I80386* cpu, uint32_t address, uint8_t value) {
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address, value);
+	return 1;
+}
+static int read_byte_logical(I80386* cpu, uint32_t base, uint32_t offset, uint8_t* value) {
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address);
+	return 1;
+}
+static int write_byte_logical(I80386* cpu, uint32_t base, uint32_t offset, uint8_t value) {
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value);
+	return 1;
+}
+static int read_byte_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint8_t* value) {
+	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 1)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[ea->segment_index].desc.base, ea->logical_address.offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address);
+	return 1;
+}
+static int write_byte_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint8_t value) {
+	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 1)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[ea->segment_index].desc.base, ea->logical_address.offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value);
+	return 1;
+}
+static int read_byte_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint8_t* value) {
+	if (!segment_read_check(cpu, segment_index, offset, 1)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address);
+	return 1;
+}
+static int write_byte_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint8_t value) {
+	if (!segment_write_check(cpu, segment_index, offset, 1)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value);
+	return 1;
+}
+static int fetch_byte(I80386* cpu, uint8_t* value) {
+	/* Code fetch 8bit byte */
+	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 1)) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
+		return 0;
+	}
+
+	cpu->eip += 1U;
+	cpu->instruction_len += 1U;
+	if (!i80386_check_instruction_len(cpu)) {
+		return 0;
+	}
+
+	*value = cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address);
+	
+	return 1;
+}
+
+/* 16 bit memory r/w */
+
+static void read_word_physical(const I80386* cpu, uint32_t address, uint16_t* value) {
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, address) | 
+		((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 1) << 8);
+}
+static void write_word_physical(const I80386* cpu, uint32_t address, uint16_t value) {
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 1, (value >> 8) & 0xFF);
+}
+static int read_word_logical(I80386* cpu, uint32_t base, uint32_t offset, uint16_t* value) {
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	return 1;
+}
+static int write_word_logical(I80386* cpu, uint32_t base, uint32_t offset, uint16_t value) {
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	return 1;
+}
+static int read_word_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint16_t* value) {
+	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 2)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	return 1;
+}
+static int write_word_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint16_t value) {
+	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 2)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	return 1;
+}
+static int read_word_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint16_t* value) {
+	if (!segment_read_check(cpu, segment_index, offset, 2)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	return 1;
+}
+static int write_word_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint16_t value) {
+	if (!segment_write_check(cpu, segment_index, offset, 2)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	return 1;
+}
+static int fetch_word(I80386* cpu, uint16_t* value) {
+	/* Code fetch 16bit word */
+	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 2)) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
+		return 0;
+	}
+
+	cpu->eip += 2U;
+	cpu->instruction_len += 2U;
+	if (!i80386_check_instruction_len(cpu)) {
+		return 0;
+	}
+
+	*value = ((uint16_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint16_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	return 1;	
+}
+
+/* 32 bit memory r/w */
+
+static void read_dword_physical(const I80386* cpu, uint32_t address, uint32_t* value) {
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, address)                  |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 1) << 8)  |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 2) << 16) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 3) << 24);
+}
+static void write_dword_physical(const I80386* cpu, uint32_t address, uint32_t value) {
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 3, (value >> 24) & 0xFF);
+}
+static int read_dword_logical(I80386* cpu, uint32_t base, uint32_t offset, uint32_t* value) {
+	if (offset > 0xFFFC) {
+		i80386_exception(cpu, cpu->effective_address.stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	return 1;
+}
+static int write_dword_logical(I80386* cpu, uint32_t base, uint32_t offset, uint32_t value) {
+	if (offset > 0xFFFC) {
+		i80386_exception(cpu, cpu->effective_address.stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	return 1;
+}
+static int read_dword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint32_t* value) {
+	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 4)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	return 1;
+}
+static int write_dword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint32_t value) {
+	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 4)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	return 1;
+}
+static int read_dword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint32_t* value) {
+	if (!segment_read_check(cpu, segment_index, offset, 4)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	return 1;
+}
+static int write_dword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint32_t value) {
+	if (!segment_write_check(cpu, segment_index, offset, 4)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	return 1;
+}
+static int fetch_dword(I80386* cpu, uint32_t* value) {
+	/* Code fetch 32bit dword */
+	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 4)) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
+		return 0;
+	}
+	
+	cpu->eip += 4U;
+	cpu->instruction_len += 4U;
+	if (!i80386_check_instruction_len(cpu)) {
+		return 0;
+	}
+
+	*value = ((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8) |
+		((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	return 1;
+}
+
+/* 64 bit memory r/w */
+
+static void read_qword_physical(const I80386* cpu, uint32_t address, uint64_t* value) {
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, address)                  |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 1) << 8)  |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 2) << 16) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 3) << 24) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 4) << 32) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 5) << 40) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 6) << 48) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 7) << 56);
+}
+static void write_qword_physical(const I80386* cpu, uint32_t address, uint64_t value) {
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 3, (value >> 24) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 4, (value >> 32) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 5, (value >> 40) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 6, (value >> 48) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 7, (value >> 56) & 0xFF);
+}
+static int read_qword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint64_t* value) {
+	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 8)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 4) << 32) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 5) << 40) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 6) << 48) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 7) << 56);
+	return 1;
+}
+static int write_qword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint64_t value) {
+	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 8)) {
+		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 4, (value >> 32) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 5, (value >> 40) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 6, (value >> 48) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 7, (value >> 56) & 0xFF);
+	return 1;
+}
+static int read_qword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint64_t* value) {
+	if (!segment_read_check(cpu, segment_index, offset, 8)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	*value = ((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 4) << 32) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 5) << 40) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 6) << 48) |
+		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 7) << 56);
+	return 1;
+}
+static int write_qword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint64_t value) {
+	if (!segment_write_check(cpu, segment_index, offset, 8)) {
+		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 1, &physical_address)) {
+		return 0;
+	}
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 4, (value >> 32) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 5, (value >> 40) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 6, (value >> 48) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 7, (value >> 56) & 0xFF);
+	return 1;
+}
+static int fetch_qword(I80386* cpu, uint64_t* value) {
+	/* Code fetch 64bit qword */
+	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 8)) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
+		return 0;
+	}
+
+	cpu->eip += 8U;
+	cpu->instruction_len += 8U;
+	if (!i80386_check_instruction_len(cpu)) {
+		return 0;
+	}
+
+	*value = ((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address)) |
+		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8) |
+		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24) |
+		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 4) << 32) |
+		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 5) << 40) |
+		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 6) << 48) |
+		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 7) << 56);	
+	return 1;
+}
+
+/* 8 bit register r/w */
+static uint8_t reg8_read(const I80386* cpu, uint8_t reg) {
+	if (reg & 0x4) {
+		return cpu->general_registers[reg & 0x3].r8.h;
 	}
 	else {
-		/* mod = 00 special case for r/m=110 -> [disp16] uses DS */
-		if (cpu->modrm.u.bits.mod == 0b00 && cpu->modrm.u.bits.rm == 0b110) {
-			return cpu->segments[SEG_DS].selector;
+		return cpu->general_registers[reg & 0x3].r8.l;
+	}
+}
+static void reg8_write(I80386* cpu, uint8_t reg, uint8_t v) {
+	if (reg & 0x4) {
+		cpu->general_registers[reg & 0x3].r8.h = v;
+	}
+	else {
+		cpu->general_registers[reg & 0x3].r8.l = v;
+	}
+}
+
+/* 16 bit register r/w */
+static uint16_t reg16_read(const I80386* cpu, uint8_t reg) {
+	return cpu->general_registers[reg & 0x7].r16;
+}
+static void reg16_write(I80386* cpu, uint8_t reg, uint16_t v) {
+	cpu->general_registers[reg & 0x7].r16 = v;
+}
+
+/* 32 bit register r/w */
+static uint32_t reg32_read(const I80386* cpu, uint8_t reg) {
+	return cpu->general_registers[reg & 0x7].r32;
+}
+static void reg32_write(I80386* cpu, uint8_t reg, uint32_t v) {
+	cpu->general_registers[reg & 0x7].r32 = v;
+}
+
+/* SIB */
+static int sib_fetch(I80386* cpu) {
+	cpu->sib.byte = 0;
+	if (!fetch_byte(cpu, &cpu->sib.byte)) {
+		return 0;
+	}
+	return 1;
+}
+static int sib_check(I80386* cpu) {
+	if (cpu->address_size && cpu->modrm.mod != 0b11 && cpu->modrm.rm == 0b100) {
+		return sib_fetch(cpu);
+	}
+	return 1;
+}
+
+/* Mod R/M */
+static uint16_t modrm_get_base_offset(const I80386* cpu, I80386_MOD_RM modrm) {
+	switch (modrm.rm) {
+		case 0b000: /* base rel indexed - BX + SI */
+			return (cpu->bx + cpu->si);
+		case 0b001: /* base rel indexed - BX + DI */
+			return (cpu->bx + cpu->di);
+		case 0b010: /* base rel indexed stack - BP + SI */
+			return (cpu->bp + cpu->si);
+		case 0b011: /* base rel indexed stack - BP + DI */
+			return (cpu->bp + cpu->di);
+		case 0b100: /* implied SI */
+			return cpu->si;
+		case 0b101: /* implied DI */
+			return cpu->di;
+		case 0b110: /* implied BP */
+			return cpu->bp;
+		case 0b111: /* implied BX */
+			return cpu->bx;
+	}
+	return 0;
+}
+static void modrm_set_effective_address_descriptor(const I80386* cpu, uint8_t segment_index, I80386_EFFECTIVE_ADDRESS* effective_address) {
+	effective_address->valid = 1;
+	effective_address->stack_address = (segment_index == SEG_SS);
+	effective_address->segment_index = segment_index;
+	effective_address->logical_address.base = cpu->segment_registers[segment_index].desc.base;
+}
+static int modrm_get_effective_address(I80386* cpu, I80386_EFFECTIVE_ADDRESS* effective_address) {
+	if (!i80386_modrm_get_offset(cpu, cpu->address_size, cpu->modrm, cpu->sib, &cpu->effective_address, fetch_byte, fetch_word, fetch_dword, cpu)) {
+		return 0;
+	}
+	if (!i80386_modrm_get_segment(cpu, cpu->address_size, cpu->modrm, cpu->sib, &cpu->effective_address, cpu->segment_override)) {
+		return 0;
+	}
+	if (effective_address) {
+		effective_address->valid = cpu->effective_address.valid;
+		effective_address->stack_address = cpu->effective_address.stack_address;
+		effective_address->segment_index = cpu->effective_address.segment_index;
+		effective_address->logical_address.offset = cpu->effective_address.logical_address.offset;
+		effective_address->logical_address.base = cpu->effective_address.logical_address.base;
+	}
+	return 1;
+}
+static int modrm_get_seg_index(I80386* cpu, const I80386_MOD_RM modrm, uint8_t* sr) {
+	if (modrm.reg > SEG_GS) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0; /* error - 386 doesnt wrap segment registers like the 8086 */
+	}
+	*sr = modrm.reg;
+	return 1;
+}
+static int fetch_modrm(I80386* cpu) {
+	cpu->modrm.byte = 0;
+	if (!fetch_byte(cpu, &cpu->modrm.byte)) {
+		return 0;
+	}
+	if (!sib_check(cpu)) {
+		return 0;
+	}
+	return 1;
+}
+static int modrm_get_rm(I80386* cpu, I80386_OPERAND* op) {
+	if (cpu->modrm.mod == 0b11) {
+		op->type = OPERAND_TYPE_GENERAL_REGISTER;
+		op->reg.index = cpu->modrm.rm;
+		return 1;
+	}
+	else {
+		int r = modrm_get_effective_address(cpu, &op->mem.ea);
+		op->type = OPERAND_TYPE_MEMORY;
+		return r;
+	}
+}
+static int modrm_add_offset_rm(I80386* cpu, I80386_OPERAND* op, int32_t offset) {
+	op->mem.ea.logical_address.offset += offset;
+	if (!cpu->address_size) {
+		op->mem.ea.logical_address.offset &= 0xFFFF;
+	}
+
+	if (op->mem.ea.logical_address.offset > cpu->segment_registers[op->mem.ea.segment_index].desc.limit) {
+		i80386_exception(cpu, op->mem.ea.stack_address ? EXCEPTION_SS : EXCEPTION_GP);
+		return 0;
+	}
+	return 1;
+}
+
+/* 8 bit Mod R/M */
+
+static int modrm_read_rm8(I80386* cpu, const I80386_OPERAND* op, uint8_t* value) {
+	if (op->type == OPERAND_TYPE_GENERAL_REGISTER) {
+		*value = reg8_read(cpu, op->reg.index);
+		return 1;
+	}
+	else {
+		return read_byte_ea(cpu, &op->mem.ea, value);
+	}
+}
+static int  modrm_write_rm8(I80386* cpu, const I80386_OPERAND* op, uint8_t value) {
+	if (op->type == OPERAND_TYPE_GENERAL_REGISTER) {
+		reg8_write(cpu, op->reg.index, value);
+		return 1;
+	}
+	else {
+		return write_byte_ea(cpu, &op->mem.ea, value);
+	}
+}
+static uint8_t modrm_read_reg8(const I80386* cpu) {
+	return reg8_read(cpu, cpu->modrm.reg);
+}
+static void modrm_write_reg8(I80386* cpu, uint8_t value) {
+	reg8_write(cpu, cpu->modrm.reg, value);
+}
+
+/* 16 bit Mod R/M */
+
+static int modrm_read_rm16(I80386* cpu, const I80386_OPERAND* op, uint16_t* value) {
+	if (op->type == OPERAND_TYPE_GENERAL_REGISTER) {
+		*value = reg16_read(cpu, op->reg.index);
+		return 1;
+	}
+	else {
+		return read_word_ea(cpu, &op->mem.ea, value);
+	}
+}
+static int modrm_write_rm16(I80386* cpu, const I80386_OPERAND* op, uint16_t value) {
+	if (op->type == OPERAND_TYPE_GENERAL_REGISTER) {
+		reg16_write(cpu, op->reg.index, value);
+		return 1;
+	}
+	else {
+		return write_word_ea(cpu, &op->mem.ea, value);
+	}
+}
+static uint16_t modrm_read_reg16(const I80386* cpu) {
+	return reg16_read(cpu, cpu->modrm.reg);
+}
+static void modrm_write_reg16(I80386* cpu, uint16_t value) {
+	reg16_write(cpu, cpu->modrm.reg, value);
+}
+
+/* 32 bit Mod R/M */
+
+static int modrm_read_rm32(I80386* cpu, const I80386_OPERAND* op, uint32_t* value) {
+	if (op->type == OPERAND_TYPE_GENERAL_REGISTER) {
+		*value = reg32_read(cpu, op->reg.index);
+		return 1;
+	}
+	else {
+		return read_dword_ea(cpu, &op->mem.ea, value);
+	}
+}
+static int modrm_write_rm32(I80386* cpu, const I80386_OPERAND* op, uint32_t value) {
+	if (op->type == OPERAND_TYPE_GENERAL_REGISTER) {
+		reg32_write(cpu, op->reg.index, value);
+		return 1;
+	}
+	else {
+		return write_dword_ea(cpu, &op->mem.ea, value);
+	}
+}
+static uint32_t modrm_read_reg32(I80386* cpu) {
+	return reg32_read(cpu, cpu->modrm.reg);
+}
+static void modrm_write_reg32(I80386* cpu, uint32_t value) {
+	reg32_write(cpu, cpu->modrm.reg, value);
+}
+
+/* Execute binary operation */
+
+static int exec_bin_Gb_Eb(I80386* cpu, void (*op)(I80386*, uint8_t*, uint8_t), int wb) {
+	/* Gb<->Eb */
+	I80386_OPERAND rm = {0};
+	uint8_t reg = 0;
+	uint8_t tmp = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+		return 0;
+	}
+	reg = modrm_read_reg8(cpu);
+	
+	if (D) {
+		/* Gb,Eb */
+		op(cpu, &reg, tmp);
+		if (wb) {
+			modrm_write_reg8(cpu, reg);
+		}
+	}
+	else {
+		/* Eb,Gb */
+		op(cpu, &tmp, reg);
+		if (wb) {
+			modrm_write_rm8(cpu, &rm, tmp);
+		}
+	}
+	return 1;
+}
+static int exec_bin_EbIb(I80386* cpu, I80386_ALU8_FUNC op, int wb) {
+	/* Eb,Ib */
+	I80386_OPERAND rm = { 0 };
+	uint8_t tmp = 0;
+	uint8_t imm = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+		return 0;
+	}
+	if (!fetch_byte(cpu, &imm)) {
+		return 0;
+	}
+	op(cpu, &tmp, imm);
+	if (wb) {
+		modrm_write_rm8(cpu, &rm, tmp);
+	}
+	return 1;
+}
+
+static int exec_bin_Gw_Ew(I80386* cpu, void (*op)(I80386*, uint16_t*, uint16_t), int wb) {
+	/* Gw<->Ew */
+	I80386_OPERAND rm = { 0 };
+	uint16_t reg = 0;
+	uint16_t tmp = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+		return 0;
+	}
+	reg = modrm_read_reg16(cpu);
+
+	if (D) {
+		/* Gw,Ew */
+		op(cpu, &reg, tmp);
+		if (wb) {
+			modrm_write_reg16(cpu, reg);
+		}
+	}
+	else {
+		/* Ew,Gw */
+		op(cpu, &tmp, reg);
+		if (wb) {
+			modrm_write_rm16(cpu, &rm, tmp);
+		}
+	}
+	return 1;
+}
+static int exec_bin_EwIw(I80386* cpu, void (*op)(I80386*, uint16_t*, uint16_t), int wb) {
+	/* Ew,Iw */
+	I80386_OPERAND rm = { 0 };
+	uint16_t imm = 0;
+	uint16_t tmp = 0;		
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!fetch_word(cpu, &imm)) {
+		return 0;
+	}
+	if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+		return 0;
+	}
+
+	op(cpu, &tmp, imm);
+	if (wb) {
+		modrm_write_rm16(cpu, &rm, tmp);
+	}
+	return 1;
+}
+static int exec_bin_EwIb(I80386* cpu, void (*op)(I80386*, uint16_t*, uint16_t), int wb, int se) {
+	/* Ew,Ib */
+	I80386_OPERAND rm = { 0 };
+	uint8_t imm = 0;
+	uint16_t tmp = 0;
+	uint16_t tmp2 = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!fetch_byte(cpu, &imm)) {
+		return 0;
+	}
+	if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+		return 0;
+	}
+
+	if (se) {
+		tmp2 = sign_extend8_16(imm);
+	}
+	else {
+		tmp2 = tmp;
+	}
+
+	op(cpu, &tmp, tmp2);
+	if (wb) {
+		modrm_write_rm16(cpu, &rm, tmp);
+	}
+	return 1;
+}
+
+static int exec_bin_Gd_Ed(I80386* cpu, void (*op)(I80386*, uint32_t*, uint32_t), int wb) {
+	/* Gd<->Ed */
+	I80386_OPERAND rm = { 0 };
+	uint32_t reg = 0;
+	uint32_t tmp = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+		return 0;
+	}
+	reg = modrm_read_reg32(cpu);
+
+	if (D) {
+		/* Gd,Ed */
+		op(cpu, &reg, tmp);
+		if (wb) {
+			modrm_write_reg32(cpu, reg);
+		}
+	}
+	else {
+		/* Ed,Gd */
+		op(cpu, &tmp, reg);
+		if (wb) {
+			modrm_write_rm32(cpu, &rm, tmp);
+		}
+	}
+	return 1;
+}
+static int exec_bin_EdId(I80386* cpu, void (*op)(I80386*, uint32_t*, uint32_t), int wb) {
+	/* Ed,Id */
+	I80386_OPERAND rm = { 0 };
+	uint32_t imm = 0;
+	uint32_t tmp = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!fetch_dword(cpu, &imm)) {
+		return 0;
+	}
+	if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+		return 0;
+	}
+
+	op(cpu, &tmp, imm);
+	if (wb) {
+		modrm_write_rm32(cpu, &rm, tmp);
+	}
+	return 1;
+}
+static int exec_bin_EdIb(I80386* cpu, void (*op)(I80386*, uint32_t*, uint32_t), int wb, int se) {
+	/* Ed,Ib */
+	I80386_OPERAND rm = { 0 };
+	uint8_t imm = 0;
+	uint32_t tmp = 0;
+	uint32_t tmp2 = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+	if (!fetch_byte(cpu, &imm)) {
+		return 0;
+	}
+	if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+		return 0;
+	}
+
+	if (se) {
+		tmp2 = sign_extend8_32(imm);
+	}
+	else {
+		tmp2 = tmp;
+	}
+
+	op(cpu, &tmp, tmp2);
+	if (wb) {
+		modrm_write_rm32(cpu, &rm, tmp);
+	}
+	return 1;
+}
+
+static int exec_bin_load_segment(I80386* cpu, uint8_t segment_index) {
+	/* Mp */
+	uint16_t selector = 0;
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return 0;
+	}
+
+	/* The mod R/M byte may refer only to memory */
+	if (cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+
+	if (!modrm_get_effective_address(cpu, NULL)) {
+		return 0;
+	}
+
+	if (cpu->operand_size) {
+		/* r32, m16:32 */
+		uint32_t offset = 0;
+
+		if (!cpu->address_size) {
+			cpu->effective_address.logical_address.offset &= 0xFFFF;
+		}
+		if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
+			return 0;
+		}
+
+		cpu->effective_address.logical_address.offset += 4;
+		if (!cpu->address_size) {
+			cpu->effective_address.logical_address.offset &= 0xFFFF;
+		}
+		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+			return 0;
+		}
+
+		if (!i80386_load_segment_register(cpu, &cpu->segment_registers[segment_index], segment_index, selector)) {
+			return 0;
+		}
+		modrm_write_reg32(cpu, offset);
+	}
+	else {
+		/* r16, m16:16 */
+		uint16_t offset = 0;
+
+		if (!cpu->address_size) {
+			cpu->effective_address.logical_address.offset &= 0xFFFF;
+		}
+		if (!read_word_ea(cpu, &cpu->effective_address, &offset)) {
+			return 0;
+		}
+
+		cpu->effective_address.logical_address.offset += 2;
+		if (!cpu->address_size) {
+			cpu->effective_address.logical_address.offset &= 0xFFFF;
+		}
+		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+			return 0;
+		}
+
+		if (!i80386_load_segment_register(cpu, &cpu->segment_registers[segment_index], segment_index, selector)) {
+			return 0;
+		}
+		modrm_write_reg16(cpu, offset);
+	}
+	return 1;
+}
+static int exec_bin_store_descriptor_table_register(I80386* cpu, I80386_DESCRIPTOR_TABLE_REGISTER* dtr) {
+	uint16_t limit = 0;
+	uint16_t base_lo = 0;
+	uint8_t  base_hi = 0;
+
+	/* The mod R/M byte may refer only to memory */
+	if (cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+	if (!modrm_get_effective_address(cpu, NULL)) {
+		return 0;
+	}
+
+	limit = dtr->limit & 0xFFFF;
+	base_lo = dtr->base & 0xFFFF;
+	base_hi = (dtr->base >> 16) & 0xFF;
+
+	if (!write_word_ea(cpu, &cpu->effective_address, limit)) {
+		return 0;
+	}
+	cpu->effective_address.logical_address.offset += 2;
+	if (!write_word_ea(cpu, &cpu->effective_address, base_lo)) {
+		return 0;
+	}
+	cpu->effective_address.logical_address.offset += 2;
+	if (!write_byte_ea(cpu, &cpu->effective_address, base_hi)) {
+		return 0;
+	}
+	return 1;
+}
+static int exec_bin_load_descriptor_table_register(I80386* cpu, I80386_DESCRIPTOR_TABLE_REGISTER* dtr) {
+	uint16_t limit = 0;
+	uint32_t base = 0;
+
+	/* The mod R/M byte may refer only to memory */
+	if (cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+
+	/* Must be ring 0 */
+	if (cpu->cpl != 0) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return 0;
+	}
+
+	if (!modrm_get_effective_address(cpu, NULL)) {
+		return 0;
+	}
+
+	if (!read_word_ea(cpu, &cpu->effective_address, &limit)) {
+		return 0;
+	}
+	cpu->effective_address.logical_address.offset += 2;
+	if (!read_dword_ea(cpu, &cpu->effective_address, &base)) {
+		return 0;
+	}
+
+	dtr->base = base;
+	dtr->limit = limit;
+	return 1;
+}
+static int exec_bin_bit_test(I80386* cpu, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32, int wb) {
+	I80386_OPERAND rm = { 0 };
+
+	if (!fetch_modrm(cpu)) {
+		return 0;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix && (!wb || (wb && rm.type != OPERAND_TYPE_MEMORY))) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t value = 0;
+		uint32_t index = 0;
+		uint32_t bit = 0;
+		int32_t dword_offset = 0;
+
+		index = modrm_read_reg32(cpu);
+		bit = index & 0x1F;
+		dword_offset = ((int32_t)index >> 5);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, dword_offset * 4)) {
+				return 0;
+			}
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &value)) {
+			return 0;
+		}
+
+		if (op32) {
+			op32(cpu, &value, bit);
+		}
+		if (wb) {
+			modrm_write_rm32(cpu, &rm, value);
+		}
+	}
+	else {
+		uint16_t value = 0;
+		uint16_t index = 0;
+		uint16_t bit = 0;
+		int16_t word_offset = 0;
+
+		index = modrm_read_reg16(cpu);
+		bit = index & 0xF;
+		word_offset = ((int16_t)index >> 4);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, word_offset * 2)) {
+				return 0;
+			}
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &value)) {
+			return 0;
+		}
+
+		if (op16) {
+			op16(cpu, &value, bit);
+		}
+		if (wb) {
+			modrm_write_rm16(cpu, &rm, value);
+		}
+	}
+	return 1;
+}
+static int exec_bin_rm_reg(I80386* cpu, I80386_ALU8_FUNC op8, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32, int wb) {
+	if (!fetch_modrm(cpu)) {
+		return 0;
+	}
+
+	/* lock prefix raises #UD if instruction is not read-modify-write memory */
+	if (cpu->lock_prefix && (!wb || cpu->modrm.mod == 0b11 || D)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+	
+	if (W) {
+		/* Ev<->Gv */
+		if (cpu->operand_size) {
+			exec_bin_Gd_Ed(cpu, op32, wb);
 		}
 		else {
-			switch (cpu->modrm.u.bits.rm) {
-				case 0b010: /* [BP+SI] */
-				case 0b011: /* [BP+DI] */
-				case 0b110: /* [BP] (mod != 00) */
-					return cpu->segments[SEG_SS].selector; /* defaults to SS */
-					break;
-				default:
-					return cpu->segments[SEG_DS].selector; /* everything else defaults to DS */
-					break;
-			}
+			exec_bin_Gw_Ew(cpu, op16, wb);
 		}
 	}
+	else {
+		/* Eb<->Gb */
+		exec_bin_Gb_Eb(cpu, op8, wb);
+	}
+
+	return 1;
 }
-static int modrm_get_offset(I80286* cpu, uint16_t* offset) {
-	switch (cpu->modrm.u.bits.mod) {
-		case 0b00:
-			if (cpu->modrm.u.bits.rm == 0b110) {
-				return fetch_word(cpu, offset);
+static int exec_bin_accum_imm(I80386* cpu, I80386_ALU8_FUNC op8, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32) {
+	if (W) {
+		if (cpu->operand_size) {
+			/* EAX,Id */
+			uint32_t imm = 0;
+			if (!fetch_dword(cpu, &imm)) {
+				return 0;
+			}
+			op32(cpu, &cpu->eax, imm);
+		}
+		else {
+			/* AX,Iw */
+			uint16_t imm = 0;
+			if (!fetch_word(cpu, &imm)) {
+				return 0;
+			}
+			op16(cpu, &cpu->ax, imm);
+		}
+	}
+	else {
+		/* AL,Ib */
+		uint8_t imm = 0;
+		if (!fetch_byte(cpu, &imm)) {
+			return 0;
+		}
+		op8(cpu, &cpu->al, imm);
+	}
+
+	return 1;
+}
+static int exec_bin_rm_imm(I80386* cpu, I80386_ALU8_FUNC op8, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32, int wb, int se) {
+	/* Group 1 */
+	
+	/* lock prefix throws #UD if not read-modify-write memory */
+	if (cpu->lock_prefix && (!wb || cpu->modrm.mod == 0b11)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+
+	if (W) {
+		if (se && S) {
+			/* Ev,Ib */
+			if (cpu->operand_size) {
+				exec_bin_EdIb(cpu, op32, wb, SE);
 			}
 			else {
-				*offset = modrm_get_base_offset(cpu);
-				return 1;
+				exec_bin_EwIb(cpu, op16, wb, SE);
 			}
+		}
+		else {
+			/* Ev,Iv */
+			if (cpu->operand_size) {
+				exec_bin_EdId(cpu, op32, wb);
+			}
+			else {
+				exec_bin_EwIw(cpu, op16, wb);
+			}
+		}
+	}
+	else {
+		/* Eb,Ib */
+		exec_bin_EbIb(cpu, op8, wb);
+	}
 
-		case 0b01: {
-			uint8_t disp8 = 0;
-			if (!fetch_byte(cpu, &disp8)) {
+	return 1;
+}
+static int exec_bin_grp2_cl(I80386* cpu, I80386_ALU8_FUNC op8, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32) {
+	/* Group 2 - CL */
+
+	/* lock prefix throws #UD if not read-modify-write memory */
+	if (cpu->lock_prefix && cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+
+	uint8_t count = 1;
+	if (VW) {
+		count = cpu->cl;
+	}
+
+	if (W) {
+		if (cpu->operand_size) {
+			I80386_OPERAND rm = { 0 };
+			uint32_t tmp = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
 				return 0;
 			}
-			*offset = (modrm_get_base_offset(cpu) + (int8_t)disp8) & 0xFFFF;
-			return 1;
-		}
-
-		case 0b10: {
-			uint16_t disp16 = 0;
-			if (!fetch_word(cpu, &disp16)) {
+			if (!modrm_read_rm32(cpu, &rm, &tmp)) {
 				return 0;
 			}
-			*offset = (modrm_get_base_offset(cpu) + (int16_t)disp16) & 0xFFFF;
-			return 1;
+			op32(cpu, &tmp, count);
+			modrm_write_rm32(cpu, &rm, tmp);
 		}
-
-		/* case 0b11: register mode never calls this */
-		case 0b11:
-		default:
-			*offset = 0;
-			return 1;
-	}
-}
-
-static int modrm_get_rm8(I80286* cpu, OPERAND8* op8) {
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		op8->is_reg = 1;
-		op8->u.reg_index = cpu->modrm.u.bits.rm;
-		return 1;
+		else {
+			I80386_OPERAND rm = { 0 };
+			uint16_t tmp = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
+				return 0;
+			}
+			if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+				return 0;
+			}
+			op16(cpu, &tmp, count);
+			modrm_write_rm16(cpu, &rm, tmp);
+		}
 	}
 	else {
-		op8->is_reg = 0;
-		op8->u.mem.segment = modrm_get_segment(cpu);
-		return modrm_get_offset(cpu, &op8->u.mem.offset);
+		I80386_OPERAND rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return 0;
+		}
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return 0;
+		}
+		op8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, &rm, tmp);
 	}
-}
 
-static int  modrm_read_rm8(I80286* cpu, OPERAND8 op8, uint8_t* value) {
-	if (op8.is_reg) {
-		*value = reg8_read(cpu, op8.u.reg_index);
-		return 1;
-	}
-	else {
-		return read_byte(cpu, op8.u.mem.segment, op8.u.mem.offset, value);
-	}
+	return 1;
 }
-static int  modrm_write_rm8(I80286* cpu, OPERAND8 op8, uint8_t value) {
-	if (op8.is_reg) {
-		reg8_write(cpu, op8.u.reg_index, value);
-		return 1;
-	}
-	else {
-		return write_byte(cpu, op8.u.mem.segment, op8.u.mem.offset, value);
-	}
-}
+static int exec_bin_grp2_imm(I80386* cpu, I80386_ALU8_FUNC op8, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32) {
+	/* Group 2 - IMM */
 
-static uint8_t modrm_read_reg8(I80286* cpu) {
-	return reg8_read(cpu, cpu->modrm.u.bits.reg);
-}
-static void modrm_write_reg8(I80286* cpu, uint8_t value) {
-	reg8_write(cpu, cpu->modrm.u.bits.reg, value);
-}
-
-static int modrm_get_rm16(I80286* cpu, OPERAND16* op16) {
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		op16->is_reg = 1;
-		op16->u.reg_index = cpu->modrm.u.bits.rm;
-		return 1;
-	}
-	else {
-		op16->is_reg = 0;
-		op16->u.mem.segment = modrm_get_segment(cpu);
-		return modrm_get_offset(cpu, &op16->u.mem.offset);
-	}
-}
-
-static int modrm_read_rm16(I80286* cpu, OPERAND16 op16, uint16_t* value) {
-	if (op16.is_reg) {
-		*value = reg16_read(cpu, op16.u.reg_index);
-		return 1;
-	}
-	else {
-		return read_word(cpu, op16.u.mem.segment, op16.u.mem.offset, value);
-	}
-}
-static int modrm_write_rm16(I80286* cpu, OPERAND16 op16, uint16_t value) {
-	if (op16.is_reg) {
-		reg16_write(cpu, op16.u.reg_index, value);
-		return 1;
-	}
-	else {
-		return write_word(cpu, op16.u.mem.segment, op16.u.mem.offset, value);
-	}
-}
-
-static uint16_t modrm_read_reg16(I80286* cpu) {
-	return reg16_read(cpu, cpu->modrm.u.bits.reg);
-}
-static void modrm_write_reg16(I80286* cpu, uint16_t value) {
-	reg16_write(cpu, cpu->modrm.u.bits.reg, value);
-}
-
-static int fetch_modrm(I80286* cpu) {
-	cpu->modrm.u.byte = 0;
-	if (!fetch_byte(cpu, &cpu->modrm.u.byte)) {
+	/* lock prefix throws #UD if not read-modify-write memory */
+	if (cpu->lock_prefix && cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return 0;
+	}
+
+	uint8_t count = 0;
+	if (W) {
+		if (cpu->operand_size) {
+			I80386_OPERAND rm = { 0 };
+			uint32_t tmp = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
+				return 0;
+			}
+			if (!fetch_byte(cpu, &count)) {
+				return 0;
+			}
+			if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+				return 0;
+			}
+			op32(cpu, &tmp, count);
+			modrm_write_rm32(cpu, &rm, tmp);
+		}
+		else {
+			I80386_OPERAND rm = { 0 };
+			uint16_t tmp = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
+				return 0;
+			}
+			if (!fetch_byte(cpu, &count)) {
+				return 0;
+			}
+			if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+				return 0;
+			}
+			op16(cpu, &tmp, count);
+			modrm_write_rm16(cpu, &rm, tmp);
+		}
+	}
+	else {
+		I80386_OPERAND rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return 0;
+		}
+		if (!fetch_byte(cpu, &count)) {
+			return 0;
+		}
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return 0;
+		}
+		op8(cpu, &tmp, count);
+		modrm_write_rm8(cpu, &rm, tmp);
 	}
 	return 1;
 }
 
-static int exec_bin_op8(I80286* cpu, void (*op)(I80286*, uint8_t*, uint8_t)) {
-	OPERAND8 rm = { 0 };
-	uint8_t reg = 0;
-	uint8_t tmp = 0;
+/* Stack functions */
 
-	if (!modrm_get_rm8(cpu, &rm)) {
-		return 0;
-	}
-
-	reg = modrm_read_reg8(cpu);
-	
-	if (!modrm_read_rm8(cpu, rm, &tmp)) {
-		return 0;
-	}
-	
-	if (D) {
-		op(cpu, &reg, tmp);
-		modrm_write_reg8(cpu, reg);
-	}
-	else {
-		op(cpu, &tmp, reg);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
-	return 1;
-}
-static int exec_bin_op8_ro(I80286* cpu, void (*op)(I80286*, uint8_t, uint8_t)) {
-	OPERAND8 rm = { 0 };
-	uint8_t reg = 0;
-	uint8_t tmp = 0;
-
-	if (!modrm_get_rm8(cpu, &rm)) {
-		return 0;
-	}
-
-	reg = modrm_read_reg8(cpu);
-	
-	if (!modrm_read_rm8(cpu, rm, &tmp)) {
-		return 0;
-	}
-	
-	if (D) {
-		op(cpu, reg, tmp);
-	}
-	else {
-		op(cpu, tmp, reg);
-	}
-	return 1;
-}
-
-static int exec_bin_rm_imm_op8(I80286* cpu, void (*op)(I80286*, uint8_t*, uint8_t)) {
-	OPERAND8 rm = { 0 };
-	uint8_t imm = 0;
-	uint8_t tmp = 0;
-
-	if (!modrm_get_rm8(cpu, &rm)) {
-		return 0;
-	}
-
-	if (!fetch_byte(cpu, &imm)) {
-		return 0;
-	}
-
-	if (!modrm_read_rm8(cpu, rm, &tmp)) {
-		return 0;
-	}
-
-	op(cpu, &tmp, imm);
-	modrm_write_rm8(cpu, rm, tmp);
-	return 1;
-}
-static int exec_bin_rm_imm_op8_ro(I80286* cpu, void (*op)(I80286*, uint8_t, uint8_t)) {
-	OPERAND8 rm = { 0 };
-	uint8_t imm = 0;
-	uint8_t tmp = 0;
-	
-	if (!modrm_get_rm8(cpu, &rm)) {
-		return 0;
-	}
-
-	if (!fetch_byte(cpu, &imm)) {
-		return 0;
-	}
-
-	if (!modrm_read_rm8(cpu, rm, &tmp)) {
-		return 0;
-	}
-
-	op(cpu, tmp, imm);
-	return 1;
-}
-
-static int exec_bin_op16(I80286* cpu, void (*op)(I80286*, uint16_t*, uint16_t)) {
-	OPERAND16 rm = { 0 };
-	uint16_t reg = 0;
+static int push_op16(I80386* cpu, I80386_OPERAND* op16) {
 	uint16_t tmp = 0;
-
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return 0;
-	}
-
-	reg = modrm_read_reg16(cpu);
-
-	if (!modrm_read_rm16(cpu, rm, &tmp)) {
-		return 0;
-	}
-
-	if (D) {
-		op(cpu, &reg, tmp);
-		modrm_write_reg16(cpu, reg);
-	}
-	else {
-		op(cpu, &tmp, reg);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	return 1;
-}
-static int exec_bin_op16_ro(I80286* cpu, void (*op)(I80286*, uint16_t, uint16_t)) {
-	OPERAND16 rm = { 0 };
-	uint16_t reg = 0;
-	uint16_t tmp = 0;
-
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return 0;
-	}
-
-	reg = modrm_read_reg16(cpu);
-
-	if (!modrm_read_rm16(cpu, rm, &tmp)) {
-		return 0;
-	}
-	
-	if (D) {
-		op(cpu, reg, tmp);
-	}
-	else {
-		op(cpu, tmp, reg);
-	}
-	return 1;
-}
-
-static int exec_bin_rm_imm_op16(I80286* cpu, void (*op)(I80286*, uint16_t*, uint16_t)) {
-	OPERAND16 rm = { 0 };
-	uint16_t imm = 0;
-	uint16_t tmp = 0;
-		
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return 0;
-	}
-
-	if (!fetch_word(cpu, &imm)) {
-		return 0;
-	}
-
-	if (!modrm_read_rm16(cpu, rm, &tmp)) {
-		return 0;
-	}
-
-	op(cpu, &tmp, imm);
-	modrm_write_rm16(cpu, rm, tmp);
-	return 1;
-}
-static int exec_bin_rm_imm_op16_ro(I80286* cpu, void (*op)(I80286*, uint16_t, uint16_t)) {
-	OPERAND16 rm = { 0 };
-	uint16_t imm = 0;
-	uint16_t tmp = 0;
-
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return 0;
-	}
-
-	if (!fetch_word(cpu, &imm)) {
-		return 0;
-	}
-
-	if (!modrm_read_rm16(cpu, rm, &tmp)) {
-		return 0;
-	}
-
-	op(cpu, tmp, imm);
-	return 1;
-}
-
-static int exec_bin_rm_imm8_op16(I80286* cpu, void (*op)(I80286*, uint16_t*, uint16_t)) {
-	OPERAND16 rm = { 0 };
-	uint8_t imm = 0;
-	uint16_t tmp = 0;
-	uint16_t se = 0;
-
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return 0;
-	}
-
-	if (!fetch_byte(cpu, &imm)) {
-		return 0;
-	}
-
-	if (!modrm_read_rm16(cpu, rm, &tmp)) {
-		return 0;
-	}
-
-	se = sign_extend8_16(imm);
-	op(cpu, &tmp, se);
-	modrm_write_rm16(cpu, rm, tmp);
-	return 1;
-}
-static int exec_bin_rm_imm8_op16_ro(I80286* cpu, void (*op)(I80286*, uint16_t, uint16_t)) {
-	OPERAND16 rm = { 0 };
-	uint8_t imm = 0;
-	uint16_t tmp = 0;
-	uint16_t se = 0;
-
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return 0;
-	}
-
-	if (!fetch_byte(cpu, &imm)) {
-		return 0;
-	}
-
-	if (!modrm_read_rm16(cpu, rm, &tmp)) {
-		return 0;
-	}
-
-	se = sign_extend8_16(imm);
-	op(cpu, tmp, se);
-	return 1;
-}
-
-static int push_op16(I80286* cpu, OPERAND16 op16) {
-	uint16_t tmp = 0;
+	cpu->effective_address.stack_address = 1;
 	if(!modrm_read_rm16(cpu, op16, &tmp)) {
 		return 0;
 	}
-	SP -= 2;
-	return write_word(cpu, SS, SP, tmp);
+	cpu->sp -= 2;
+	return write_word_sreg(cpu, SEG_SS, cpu->sp, tmp);
 }
-static int push_word(I80286* cpu, uint16_t value) {
-	SP -= 2;
-	return write_word(cpu, SS, SP, value);
-}
-
-static int pop_op16(I80286* cpu, OPERAND16 op16) {
-	uint16_t tmp = 0;
-	if (!read_word(cpu, SS, SP, &tmp)) {
-		return 0;
+static int push_word(I80386* cpu, uint16_t value) {
+	cpu->effective_address.stack_address = 1;
+	if (cpu->address_size) {
+		cpu->esp -= 2;
+		return write_word_sreg(cpu, SEG_SS, cpu->esp, value);
 	}
-	SP += 2;
+	else {
+		cpu->sp -= 2;
+		return write_word_sreg(cpu, SEG_SS, cpu->sp, value);
+	}
+}
+static int push_word_at(I80386* cpu, uint32_t* offset, uint16_t value) {
+	*offset = (*offset) - 2;
+	cpu->effective_address.stack_address = 1;
+	return write_word_sreg(cpu, SEG_SS, *offset, value);
+}
+static int push_word_align(I80386* cpu, uint16_t value) {
+	cpu->effective_address.stack_address = 1;
+	if (cpu->address_size) {
+		cpu->esp -= 4;
+		return write_word_sreg(cpu, SEG_SS, cpu->esp, value);
+	}
+	else {
+		cpu->sp -= 4;
+		return write_word_sreg(cpu, SEG_SS, cpu->sp, value);
+	}
+}
+static int push_word_align_at(I80386* cpu, uint32_t* offset, uint16_t value) {
+	*offset = (*offset) - 4;
+	cpu->effective_address.stack_address = 1;
+	return write_word_sreg(cpu, SEG_SS, *offset, value);
+}
+static int pop_op16(I80386* cpu, I80386_OPERAND* op16) {
+	uint16_t tmp = 0;
+	cpu->effective_address.stack_address = 1;
+	if (cpu->address_size) {
+		if (!read_word_sreg(cpu, SEG_SS, cpu->esp, &tmp)) {
+			return 0;
+		}
+		cpu->esp += 2;
+	}
+	else {
+		if (!read_word_sreg(cpu, SEG_SS, cpu->sp, &tmp)) {
+			return 0;
+		}
+		cpu->sp += 2;
+	}
 	return modrm_write_rm16(cpu, op16, tmp);
 }
-static int pop_word(I80286* cpu, uint16_t* value) {
-	if (!read_word(cpu, SS, SP, value)) {
-		return 0;		
+static int pop_word(I80386* cpu, uint16_t* value) {
+	cpu->effective_address.stack_address = 1;
+	if (cpu->address_size) {
+		if (!read_word_sreg(cpu, SEG_SS, cpu->esp, value)) {
+			return 0;
+		}
+		cpu->esp += 2;
 	}
-	SP += 2;
+	else {
+		if (!read_word_sreg(cpu, SEG_SS, cpu->sp, value)) {
+			return 0;
+		}
+		cpu->sp += 2;
+	}
+	return 1;
+}
+static int pop_word_at(I80386* cpu, uint32_t* offset, uint16_t* value) {
+	cpu->effective_address.stack_address = 1;
+	if (!read_word_sreg(cpu, SEG_SS, *offset, value)) {
+		return 0;
+	}
+	*offset = (*offset) + 2;
+	return 1;
+}
+static int pop_word_align(I80386* cpu, uint16_t* value) {
+	/* 32-bit pop, high-order 16-bits discarded */
+	uint32_t tmp = 0;
+	cpu->effective_address.stack_address = 1;
+	if (cpu->address_size) {
+		if (!read_dword_sreg(cpu, SEG_SS, cpu->esp, &tmp)) {
+			return 0;
+		}
+		cpu->esp += 4;
+	}
+	else {
+		if (!read_dword_sreg(cpu, SEG_SS, cpu->sp, &tmp)) {
+			return 0;
+		}
+		cpu->sp += 4;
+	}
+	*value = tmp & 0xFFFF;
+	return 1;
+}
+static int pop_word_align_at(I80386* cpu, uint32_t* offset, uint16_t* value) {
+	/* 32-bit pop, high-order 16-bits discarded */
+	uint32_t tmp = 0;
+	cpu->effective_address.stack_address = 1;
+	if (!read_dword_sreg(cpu, SEG_SS, *offset, &tmp)) {
+		return 0;
+	}
+	*value = tmp & 0xFFFF;
+	*offset = (*offset) + 4;
+	return 1;
+}
+static int stack_peek_word(I80386* cpu, int i, uint16_t* value) {
+	if (cpu->address_size) {
+		return read_word_sreg(cpu, SEG_SS, cpu->esp + i, value);
+	}
+	else {
+		return read_word_sreg(cpu, SEG_SS, cpu->sp + i, value);
+	}
+}
+
+static int push_op32(I80386* cpu, I80386_OPERAND* op32) {
+	uint32_t tmp = 0;
+	if(!modrm_read_rm32(cpu, op32, &tmp)) {
+		return 0;
+	}
+	cpu->effective_address.stack_address = 1;
+
+	if (cpu->address_size) {
+		cpu->esp -= 4;
+		return write_dword_sreg(cpu, SEG_SS, cpu->esp, tmp);
+	}
+	else {
+		cpu->sp -= 4;
+		return write_dword_sreg(cpu, SEG_SS, cpu->sp, tmp);
+	}
+}
+static int push_dword(I80386* cpu, uint32_t value) {
+	cpu->effective_address.stack_address = 1;
+	if (cpu->address_size) {
+		cpu->esp -= 4;
+		return write_dword_sreg(cpu, SEG_SS, cpu->esp, value);
+	}
+	else {
+		cpu->sp -= 4;
+		return write_dword_sreg(cpu, SEG_SS, cpu->sp, value);
+	}
+}
+static int push_dword_at(I80386* cpu, uint32_t* offset, uint32_t value) {
+	*offset = (*offset) - 4;
+	cpu->effective_address.stack_address = 1;
+	return write_dword_sreg(cpu, SEG_SS, *offset, value);
+}
+static int pop_op32(I80386* cpu, I80386_OPERAND* op32) {
+	uint32_t tmp = 0;
+	cpu->effective_address.stack_address = 1;
+	if (cpu->address_size) {
+		if (!read_dword_sreg(cpu, SEG_SS, cpu->esp, &tmp)) {
+			return 0;
+		}
+		cpu->esp += 4;
+	}
+	else {
+		if (!read_dword_sreg(cpu, SEG_SS, cpu->sp, &tmp)) {
+			return 0;
+		}
+		cpu->sp += 4;
+	}
+	return modrm_write_rm32(cpu, op32, tmp);
+}
+static int pop_dword(I80386* cpu, uint32_t* value) {
+	cpu->effective_address.stack_address = 1;
+
+	if (cpu->address_size) {
+		if (!read_dword_sreg(cpu, SEG_SS, cpu->esp, value)) {
+			return 0;
+		}
+		cpu->esp += 4;
+	}
+	else {
+		if (!read_dword_sreg(cpu, SEG_SS, cpu->sp, value)) {
+			return 0;
+		}
+		cpu->sp += 4;
+	}
+	return 1;
+}
+static int pop_dword_at(I80386* cpu, uint32_t* offset, uint32_t* value) {
+	cpu->effective_address.stack_address = 1;
+	if (!read_dword_sreg(cpu, SEG_SS, *offset, value)) {
+		return 0;
+	}
+	*offset = (*offset) + 4;
+	return 1;
+}
+static int stack_peek_dword(I80386* cpu, int i, uint32_t* value) {
+	if (cpu->address_size) {
+		return read_dword_sreg(cpu, SEG_SS, cpu->esp + i, value);
+	}
+	else {
+		return read_dword_sreg(cpu, SEG_SS, cpu->sp + i, value);
+	}
+}
+
+/* Gate functions */
+
+static int i80386_int_gate(I80386* cpu, uint8_t vector, int interrupt_type, I80386_GATE* gate) {
+	I80386_GATE idt_gate = { 0 };
+	uint16_t offset = 0;
+
+	offset = (uint16_t)vector << 3;
+	if (offset + 7U > cpu->idtr.limit) {
+		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+		return 0;
+	}
+
+	read_qword_physical(cpu, cpu->idtr.base + offset, &idt_gate.qword);
+
+	if (idt_gate.present == 0) {
+		i80386_exception_code(cpu, EXCEPTION_NP, idt_gate.selector);
+		return 0;
+	}
+
+	/* Hardware interrupts ignore gate DPL */
+	if (interrupt_type == I80386_INTERRUPT_TYPE_SOFTWARE && cpu->cpl > gate->dpl) {
+		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+		return 0;
+	}
+
+	/* Only TASK, INT or TRAP gates are allowed */
+	if (idt_gate.type != I80386_GATE_TYPE_TASK &&
+		idt_gate.type != I80386_GATE_TYPE_INT_286 &&
+		idt_gate.type != I80386_GATE_TYPE_TRAP_286 &&
+		idt_gate.type != I80386_GATE_TYPE_INT_386 &&
+		idt_gate.type != I80386_GATE_TYPE_TRAP_386) {
+		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+		return 0;
+	}
+
+	gate->offset_lo = idt_gate.offset_lo | ((uint32_t)idt_gate.offset_hi << 16);
+	gate->offset_hi = idt_gate.offset_hi;
+	gate->selector = idt_gate.selector;
+	gate->access = idt_gate.access;
+	return 1;
+}
+static int i80386_call_gate(I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
+	I80386_GATE call_gate = { 0 };
+	uint8_t rpl = selector & 3;
+	uint8_t cpl = cpu->cpl > rpl ? cpu->cpl : rpl;
+
+	call_gate.qword = entry->qword;
+
+	if (!call_gate.present) {
+		i80386_exception_code(cpu, EXCEPTION_NP, selector);
+		return 0;
+	}
+
+	if (cpl > call_gate.dpl) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
+		return 0;
+	}
+
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, call_gate.selector)) {
+		return 0;
+	}
+
+	if (call_gate.type == I80386_GATE_TYPE_CALL_286) {
+		cpu->eip = call_gate.offset_lo; /* clear upper 16bits */
+	}
+	else if (call_gate.type == I80386_GATE_TYPE_CALL_386) {
+		cpu->eip = call_gate.offset_lo | call_gate.offset_hi << 16;
+	}
+
 	return 1;
 }
 
-void i80286_intr(I80286* cpu, uint8_t type) {
-	if (!INTR) {
-		INTR = 1;
-		cpu->intr_type = type;
+/* TLB functions */
+
+static void i80386_flush_tlb(I80386* cpu) {
+	/* flush all pages from the tlb */
+	for (int i = 0; i < cpu->tlb.count; ++i) {
+		cpu->tlb.entries[i].valid = 0;
+	}
+	cpu->tlb.count = 0;
+	cpu->tlb.index = 0;
+}
+static int i80386_flush_tlb_page(I80386* cpu, uint32_t linear_page) {
+	/* flush selected page from the tlb */
+	for (int i = 0; i < cpu->tlb.count; ++i) {
+		if (cpu->tlb.entries[i].linear_page == linear_page) {
+			cpu->tlb.entries[i].valid = 0;
+			return 1;
+		}
+	}
+	return 0;
+}
+static int i80386_search_tlb(const I80386* cpu, uint32_t linear_page, const I80386_TLB_ENTRY** tlb) {
+	/* search for a page in the tlb */
+	for (int i = 0; i < cpu->tlb.count; ++i) {
+		if (cpu->tlb.entries[i].valid && cpu->tlb.entries[i].linear_page == linear_page) {
+			*tlb = &cpu->tlb.entries[i];
+			return 1;
+		}
+	}
+	return 0;
+}
+static void i80386_insert_tlb(I80386* cpu, uint32_t linear_page, I80386_PAGE_TABLE_ENTRY pde, I80386_PAGE_TABLE_ENTRY pte) {
+	/* insert a page in the tlb */
+	int insert_index = -1;
+
+	for (int i = 0; i < I80386_TLB_SIZE; ++i) {
+		/* update existing entry if exists */
+		if (cpu->tlb.entries[i].valid && cpu->tlb.entries[i].linear_page == linear_page) {
+			insert_index = i;
+			break;
+		}
+		/* replace the first invalid entry */
+		if (insert_index == -1 && !cpu->tlb.entries[i].valid) {
+			insert_index = i;
+			if (i > cpu->tlb.count) {
+				cpu->tlb.count = i;
+			}
+			else if (i == cpu->tlb.count) {
+				cpu->tlb.count++;
+			}
+		}
+	}
+
+	/* no free entry? replace the oldest entry */
+	if (insert_index == -1) {
+		insert_index = cpu->tlb.index;
+		cpu->tlb.index = (cpu->tlb.index + 1) % I80386_TLB_SIZE;
+	}
+
+	cpu->tlb.entries[insert_index].linear_page = linear_page;
+	cpu->tlb.entries[insert_index].physical_page = pte.page_frame_address;
+	cpu->tlb.entries[insert_index].rw = pde.rw & pte.rw;
+	cpu->tlb.entries[insert_index].us = pde.us & pte.us;
+	cpu->tlb.entries[insert_index].valid = 1;
+}
+
+/* Task functions */
+
+static int i80386_task_load_from_tss_image(I80386* cpu, const I80386_TASK_STATE_SEGMENT* tss) {
+	/* Load CPU State from tss image */
+
+	I80386_SEGMENT_REGISTER es = { 0 };
+	I80386_SEGMENT_REGISTER cs = { 0 };
+	I80386_SEGMENT_REGISTER ss = { 0 };
+	I80386_SEGMENT_REGISTER ds = { 0 };
+	I80386_SEGMENT_REGISTER fs = { 0 };
+	I80386_SEGMENT_REGISTER gs = { 0 };
+	I80386_SEGMENT_REGISTER ldtr = { 0 };
+	if (!i80386_load_segment_register(cpu, &es, SEG_ES, tss->es & 0xFFFF)) {
+		return 0;
+	}
+	if (!i80386_load_segment_register(cpu, &cs, SEG_CS, tss->cs & 0xFFFF)) {
+		return 0;
+	}
+	if (!i80386_load_segment_register(cpu, &ss, SEG_SS, tss->ss & 0xFFFF)) {
+		return 0;
+	}
+	if (!i80386_load_segment_register(cpu, &ds, SEG_DS, tss->ds & 0xFFFF)) {
+		return 0;
+	}
+	if (!i80386_load_segment_register(cpu, &fs, SEG_FS, tss->fs & 0xFFFF)) {
+		return 0;
+	}
+	if (!i80386_load_segment_register(cpu, &gs, SEG_GS, tss->gs & 0xFFFF)) {
+		return 0;
+	}
+	if (!i80386_load_segment_register(cpu, &ldtr, -1, tss->ldt & 0xFFFF)) {
+		return 0;
+	}
+
+	cpu->cr3 = tss->cr3;
+	cpu->eip = tss->eip;
+	cpu->eflags.dword = tss->eflags;
+	cpu->eax = tss->eax;
+	cpu->ecx = tss->ecx;
+	cpu->edx = tss->edx;
+	cpu->ebx = tss->ebx;
+	cpu->esp = tss->esp;
+	cpu->ebp = tss->ebp;
+	cpu->esi = tss->esi;
+	cpu->edi = tss->edi;
+	i80386_copy_segment_descriptor(&cpu->es, &es);
+	i80386_copy_segment_descriptor(&cpu->cs, &cs);
+	i80386_copy_segment_descriptor(&cpu->ss, &ss);
+	i80386_copy_segment_descriptor(&cpu->ds, &ds);
+	i80386_copy_segment_descriptor(&cpu->fs, &fs);
+	i80386_copy_segment_descriptor(&cpu->gs, &gs);
+	i80386_flush_tlb(cpu);
+	return 1;
+}
+static int i80386_task_store_to_tss_image(const I80386* cpu, I80386_TASK_STATE_SEGMENT* tss) {
+	/* Store CPU State to tss image */
+	tss->cr3 = cpu->cr3;
+	tss->eip = cpu->eip;
+	tss->eflags = cpu->eflags.dword;
+	tss->eax = cpu->eax;
+	tss->ecx = cpu->ecx;
+	tss->edx = cpu->edx;
+	tss->ebx = cpu->ebx;
+	tss->esp = cpu->esp;
+	tss->ebp = cpu->ebp;
+	tss->esi = cpu->esi;
+	tss->edi = cpu->edi;
+	tss->es = cpu->es.selector;
+	tss->cs = cpu->cs.selector;
+	tss->ss = cpu->ss.selector;
+	tss->ds = cpu->ds.selector;
+	tss->fs = cpu->fs.selector;
+	tss->gs = cpu->gs.selector;
+	tss->ldt = cpu->ldtr.selector;
+	return 1;
+}
+static int i80386_task_read_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80386_TASK_STATE_SEGMENT* tss) {
+	if (!cache->access.p) {
+		i80386_exception_code(cpu, EXCEPTION_NP, 0);
+		return 0;
+	}
+
+	if (cache->limit < 0x67) {
+		i80386_exception_code(cpu, EXCEPTION_TS, 0);
+		return 0;
+	}
+
+	for (int i = 0; i < sizeof(I80386_TASK_STATE_SEGMENT) / 4; ++i) {
+		read_dword_physical(cpu, cache->base + i * 4, &tss->values[i]);
+	}
+
+	return 1;
+}
+static int i80386_task_write_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80386_TASK_STATE_SEGMENT* tss) {
+	if (!cache->access.p) {
+		i80386_exception_code(cpu, EXCEPTION_NP, 0);
+		return 0;
+	}
+
+	if (cache->limit < 0x67) {
+		i80386_exception_code(cpu, EXCEPTION_TS, 0);
+		return 0;
+	}
+
+	for (int i = 0; i < sizeof(I80386_TASK_STATE_SEGMENT) / 4; ++i) {
+		write_dword_physical(cpu, cache->base + i * 4, tss->values[i]);
+	}
+
+	return 1;
+}
+static void i80386_task_set_busy(I80386_DESCRIPTOR_TABLE_ENTRY* desc) {
+	if (desc->access.type == I80386_GATE_TYPE_AVAL_286) {
+		desc->access.type = I80386_GATE_TYPE_BUSY_286;
+	}
+	else if (desc->access.type == I80386_GATE_TYPE_AVAL_386) {
+		desc->access.type = I80386_GATE_TYPE_BUSY_386;
 	}
 }
-void i80286_nmi(I80286* cpu) {
-	NMI = 1;
+static void i80386_task_clear_busy(I80386_DESCRIPTOR_TABLE_ENTRY* desc) {
+	if (desc->access.type == I80386_GATE_TYPE_BUSY_286) {
+		desc->access.type = I80386_GATE_TYPE_AVAL_286;
+	}
+	else if (desc->access.type == I80386_GATE_TYPE_BUSY_386) {
+		desc->access.type = I80386_GATE_TYPE_AVAL_386;
+	}
 }
-void i80286_int(I80286* cpu, uint8_t type) {
-	push_word(cpu, PSW);
-	push_word(cpu, CS);
-	push_word(cpu, IP);
-	uint16_t offset = type * 4;
+static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH_REASON reason) {
+	I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+	I80386_DESCRIPTOR_TABLE_ENTRY old_entry = { 0 };
+	I80386_DESCRIPTOR_CACHE cache = { 0 };
+	I80386_TASK_STATE_SEGMENT tss = { 0 };
 
-	read_word(cpu, 0x0000, offset, &IP);
-	read_word(cpu, 0x0000, offset + 2, &CS);
-	IF = 0;
-	TF = 0;
+	/* task_validate_tss_descriptor */
+	if (selector == 0) {
+		i80386_exception_code(cpu, EXCEPTION_TS, 0);
+		return 0;
+	}
+	if (!i80386_read_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
+		return 0;
+	}
+	if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
+		return 0;
+	}
+	i80386_update_segment_descriptor_cache(&entry, &cache);
+
+	/* task_save_current_task */
+	if (!i80386_task_write_tss(cpu, &cpu->tr.desc, &cpu->tss)) {
+		return 0;
+	}
+
+	/* task_update_desc [reason] */
+	switch (reason) {
+		case TASK_SWITCH_CALL:
+		case TASK_SWITCH_INT:
+			i80386_task_set_busy(&entry);
+			write_word_physical(cpu, cache.base, cpu->tr.selector); /* back_link = tr */
+			if (!i80386_write_descriptor_table_entry(cpu, selector, &entry)) {
+				return 0;
+			}
+			break;
+		case TASK_SWITCH_JMP:
+			i80386_task_clear_busy(&old_entry);
+			i80386_task_set_busy(&entry);
+			if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
+				return 0;
+			}
+			if (!i80386_write_descriptor_table_entry(cpu, selector, &entry)) {
+				return 0;
+			}
+			break;
+		case TASK_SWITCH_IRET:
+			i80386_task_clear_busy(&old_entry);
+			if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
+				return 0;
+			}
+			break;
+	}
+
+	/* task_write_back_descriptor */
+	if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
+		return 0;
+	}
+	if (!i80386_write_descriptor_table_entry(cpu, selector, &entry)) {
+		return 0;
+	}
+
+	/* task_load_new_tss */
+	if (!i80386_task_read_tss(cpu, &cache, &tss)) {
+		return 0;
+	}
+
+	/* task_load_task_register */
+	cpu->tr.selector = selector;
+	i80386_update_system_descriptor_cache(&entry, &cpu->tr.desc);
+
+	/* task_load_cpu_from_tss */
+	if (!i80386_task_load_from_tss_image(cpu, &tss)) {
+		return 0;
+	}
+
+	/* set_ts */
+	cpu->msw.ts = 1;
+
+	/* task_update_nt [reason] */
+	switch (reason) {
+		case TASK_SWITCH_CALL:
+		case TASK_SWITCH_INT:
+			cpu->eflags.psw.nt = 1;
+			break;
+		case TASK_SWITCH_JMP:
+			break;
+		case TASK_SWITCH_IRET:
+			cpu->psw.nt = 0;
+			break;
+	}
+
+	return 1;
 }
-void i80286_exception(I80286* cpu, uint8_t exception) {
-	IP -= cpu->instruction_len;
-	i80286_int(cpu, exception);
+
+/* Interrupt functions */
+
+static int i80386_gate_interrupt(I80386* cpu, I80386_GATE gate) {
+	uint32_t final_esp = cpu->esp;
+
+	/* Push frame */
+	if (!push_word_at(cpu, &final_esp, cpu->psw.word)) {
+		return 0;
+	}
+	if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
+		return 0;
+	}
+	if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
+		return 0;
+	}
+
+	/* commit register values */
+	if (cpu->address_size) {
+		cpu->esp = final_esp;
+	}
+	else {
+		cpu->esp = final_esp & 0xFFFF;
+	}
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, gate.selector)) {
+		return 0;
+	}
+	cpu->eip = gate.offset_lo | (gate.offset_hi << 16);
+	cpu->psw.in = 0;
+	cpu->psw.tf = 0;
+	cpu->halt = 0;
+	return 1;
 }
-static void i80286_check_interrupts(I80286* cpu) {
+void i80386_intr(I80386* cpu, uint8_t vector) {
+	if (!cpu->intr) {
+		cpu->intr = 1;
+		cpu->intr_type = vector;
+	}
+}
+void i80386_nmi(I80386* cpu) {
+	cpu->nmi = 1;
+}
+int i80386_int(I80386* cpu, uint8_t vector, int interrupt_type) {
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		uint16_t offset = 0;
+		uint16_t selector = 0;
+		uint32_t final_esp = cpu->esp;
+		uint32_t vector_offset = vector << 2;
+		if (vector_offset + 3U > cpu->idtr.limit) {
+			i80386_exception(cpu, EXCEPTION_GP);
+			return 0;
+		}
+		if (!read_word_logical(cpu, cpu->idtr.base, vector_offset, &offset)) {
+			return 0;
+		}
+		if (!read_word_logical(cpu, cpu->idtr.base, vector_offset + 2, &selector)) {
+			return 0;
+		}
+
+		/* push frame */
+		if (!push_word_at(cpu, &final_esp, cpu->psw.word)) {
+			return 0;
+		}
+		if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
+			return 0;
+		}
+		if (!push_word_at(cpu, &final_esp, cpu->ip)) {
+			return 0;
+		}
+
+		/* commit register values */
+		if (cpu->address_size) {
+			cpu->esp = final_esp;
+		}
+		else {
+			cpu->esp = final_esp & 0xFFFF;
+		}
+		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+			return 0;
+		}
+		cpu->eip = offset; /* clear upper 16bits */
+		cpu->psw.in = 0;
+		cpu->psw.tf = 0;
+		cpu->halt = 0;
+	}
+	else if (!cpu->eflags.vm) {
+		/* Protected mode */
+		I80386_GATE gate = { 0 };
+		if (!i80386_int_gate(cpu, vector, interrupt_type, &gate)) {
+			return 0;
+		}
+
+		switch (gate.type) {
+			case I80386_GATE_TYPE_TASK:
+				i80386_task_switch(cpu, gate.selector, TASK_SWITCH_INT);
+				break;
+			case I80386_GATE_TYPE_INT_286:
+			case I80386_GATE_TYPE_INT_386:
+			case I80386_GATE_TYPE_TRAP_286:
+			case I80386_GATE_TYPE_TRAP_386:
+				i80386_gate_interrupt(cpu, gate);
+				break;
+		}		
+	}
+	else {
+		/* Virtual 8086 mode */
+		
+	}
+
+	return 1;
+}
+static int i80386_classify_exception(uint8_t exception) {
+    switch (exception) {
+        case EXCEPTION_TS:
+        case EXCEPTION_NP:
+        case EXCEPTION_SS:
+        case EXCEPTION_GP:
+            return I80386_EXCEPTION_CLASS_CONTRIBUTORY;
+        case EXCEPTION_PF:
+            return I80386_EXCEPTION_CLASS_PAGE_FAULT;
+        default:
+            return I80386_EXCEPTION_CLASS_BENIGN;
+    }
+}
+void i80386_exception(I80386 * cpu, uint8_t exception) {
+	switch (cpu->exception.state) {
+		case I80386_EXCEPTION_STATE_TRIPLE_FAULT:
+			break;
+		case I80386_EXCEPTION_STATE_DOUBLE_FAULT:
+			cpu->exception.state = I80386_EXCEPTION_STATE_TRIPLE_FAULT;
+			cpu->exception.tf_number = exception;
+			break;
+		case I80386_EXCEPTION_STATE_STD: {
+			int first = i80386_classify_exception(cpu->exception.number);
+			int second = i80386_classify_exception(exception);
+			if ((first == I80386_EXCEPTION_CLASS_CONTRIBUTORY && second == I80386_EXCEPTION_CLASS_CONTRIBUTORY) ||
+				(first == I80386_EXCEPTION_CLASS_PAGE_FAULT && second == I80386_EXCEPTION_CLASS_CONTRIBUTORY) ||
+				(first == I80386_EXCEPTION_CLASS_PAGE_FAULT && second == I80386_EXCEPTION_CLASS_PAGE_FAULT)) {
+				cpu->exception.state = I80386_EXCEPTION_STATE_DOUBLE_FAULT;
+				cpu->exception.df_number = exception;
+				i80386_int(cpu, EXCEPTION_DF, I80386_INTERRUPT_TYPE_HARDWARE);
+				break;
+			}
+		} 
+		/* Not a double fault; fall through to NONE */
+		case I80386_EXCEPTION_STATE_NONE:
+			cpu->exception.state = I80386_EXCEPTION_STATE_STD;
+			cpu->exception.number = exception;
+			cpu->exception.code = 0;
+			cpu->exception.df_number = 0;
+			cpu->exception.tf_number = 0;
+			i80386_rollback_instruction(cpu); /* eip at exception points to instruction that caused it. */
+			i80386_int(cpu, exception, I80386_INTERRUPT_TYPE_HARDWARE);
+			break;
+	}
+}
+void i80386_exception_code(I80386* cpu, uint8_t exception, uint16_t code) {
+	cpu->exception.code = code;
+	i80386_exception(cpu, exception);
+}
+void i80386_page_fault(I80386* cpu, uint32_t linear_address, int present, int is_write) {
+	cpu->cr2 = linear_address;
+	uint8_t code = 0;
+	if (!present) {
+		code |= 0x1;
+	}
+	if (is_write) {
+		code |= 0x2;
+	}
+	if (cpu->cpl == 0x3) {
+		code |= 0x4;
+	}
+	i80386_exception_code(cpu, EXCEPTION_PF, code);
+}
+static void i80386_check_interrupts(I80386* cpu) {
 	if (cpu->int_delay == 1) {
 		cpu->int_delay = 0;
 		return;
 	}
 
-	if (NMI) {
+	if (cpu->nmi) {
 		/* Non-Maskable int */
-		NMI = 0;
-		i80286_int(cpu, INT_NMI);
-		cpu->halt = 0; /* stop halting */
+		cpu->nmi = 0;
+		i80386_int(cpu, INT_NMI, I80386_INTERRUPT_TYPE_HARDWARE);
 	}
-	else if (INTR && cpu->int_latch) {
+	else if (cpu->intr && cpu->int_latch) {
 		/* Hardware int; INTR is masked by IF */
-		INTR = 0;
-		i80286_int(cpu, cpu->intr_type);
-		cpu->halt = 0; /* stop halting */
+		cpu->intr = 0;
+		i80386_int(cpu, cpu->intr_type, I80386_INTERRUPT_TYPE_HARDWARE);
 	}
 
 	if (cpu->tf_latch) {
 		/* Trap int */
-		i80286_int(cpu, INT_TRAP); 
-		cpu->halt = 0; /* stop halting */
+		i80386_int(cpu, INT_TRAP, I80386_INTERRUPT_TYPE_HARDWARE);
 	}
 
 	/* latch int flag for next cycle */
-	cpu->int_latch = IF;
+	cpu->int_latch = cpu->psw.in;
 
 	/* latch trap flag for next cycle */
-	cpu->tf_latch = TF;
+	cpu->tf_latch = cpu->psw.tf;
 }
-
-static void i80286_check_halt(I80286* cpu) {
+static int i80386_check_halt(I80386* cpu) {
 	if (cpu->halt) {
-		IP -= cpu->instruction_len; /* continue halting */
+		return 0;
 	}
+	return 1;
 }
 
-static int modrm_get_seg_index(I80286* cpu, uint8_t* sr) {
-	if (cpu->modrm.u.bits.reg > 3) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return 0; /* error - 286 doesnt wrap segment registers like the 8086 */
+/* Address Translation functions */
+
+int i80386_segment_translation(I80386* cpu, uint32_t base, uint32_t offset, uint32_t* linear_address) {
+	(void)cpu;
+	*linear_address = i80386_get_physical_address_bo(base, offset);
+	return 1;
+}
+static int i80386_read_page_directory_entry(I80386* cpu, I80386_PAGE_TABLE_ENTRY* pde, I80386_LINEAR_ADDRESS la, int is_write) {
+	uint32_t pde_address = 0;
+	uint32_t pde_old = 0;
+
+	pde_address = (cpu->cr3 & 0xFFFFF000) | (la.dir << 2);
+	read_dword_physical(cpu, pde_address, &pde->dword);
+
+	if (!pde->present) {
+		i80386_page_fault(cpu, la.dword, 1, is_write);
+		return 0;
 	}
-	*sr = cpu->modrm.u.bits.reg;
+	if (cpu->cpl == 0x3) {
+		if (is_write && !pde->rw) {
+			i80386_page_fault(cpu, la.dword, 0, is_write);
+			return 0;
+		}
+		if (!pde->us) {
+			i80386_page_fault(cpu, la.dword, 0, is_write);
+			return 0;
+		}
+	}
+	pde_old = pde->dword;
+	pde->accessed = 1;
+
+	if (pde_old != pde->dword) {
+		write_dword_physical(cpu, pde_address, pde->dword);
+	}
+	return 1;
+}
+static int i80386_read_page_table_entry(I80386* cpu, I80386_PAGE_TABLE_ENTRY* pde, I80386_PAGE_TABLE_ENTRY* pte, I80386_LINEAR_ADDRESS la, int is_write) {
+	uint32_t pte_address = 0;
+	uint32_t pte_old = 0;
+	
+	pte_address = (pde->page_frame_address << 12) | (la.page << 2);
+	read_dword_physical(cpu, pte_address, &pte->dword);
+
+	if (!pte->present) {
+		i80386_page_fault(cpu, la.dword, 1, is_write);
+		return 0;
+	}
+	if (cpu->cpl == 0x3) {
+		if (is_write && !pte->rw) {
+			i80386_page_fault(cpu, la.dword, 0, is_write);
+			return 0;
+		}
+		if (!pte->us) {
+			i80386_page_fault(cpu, la.dword, 0, is_write);
+			return 0;
+		}
+	}
+	pte_old = pte->dword;
+	pte->accessed = 1;
+	if (is_write) {
+		pte->dirty = 1;
+	}
+
+	if (pte_old != pte->dword) {
+		write_dword_physical(cpu, pte_address, pte->dword);
+	}
+	return 1;
+}
+int i80386_page_translation(I80386* cpu, uint32_t linear_address, int is_write, uint32_t* physical_address) {
+	I80386_LINEAR_ADDRESS la = { .dword = linear_address };
+	I80386_PAGE_TABLE_ENTRY pde = { 0 };
+	I80386_PAGE_TABLE_ENTRY pte = { 0 };
+	uint32_t linear_page = linear_address >> 12;
+	I80386_TLB_ENTRY* tlb_entry = NULL;
+
+	if (i80386_search_tlb(cpu, linear_page, &tlb_entry)) {
+		if (cpu->cpl == 0x3) {
+			if (is_write && !tlb_entry->rw) {
+				i80386_page_fault(cpu, la.dword, 0, is_write);
+				return 0;
+			}
+			if (!tlb_entry->us) {
+				i80386_page_fault(cpu, la.dword, 0, is_write);
+				return 0;
+			}
+		}
+		if (physical_address) {
+			*physical_address = (tlb_entry->physical_page << 12) | la.offset;
+		}
+		return 1; /* TLB Hit */
+	}
+
+	/* TLB Miss */
+
+	/* Read PDE */
+	if (!i80386_read_page_directory_entry(cpu, &pde, la, is_write)) {
+		return 0;
+	}
+
+	/* Read PTE */
+	if (!i80386_read_page_table_entry(cpu, &pde, &pte, la, is_write)) {
+		return 0;
+	}
+
+	/* Cache in TLB */
+	i80386_insert_tlb(cpu, linear_page, pde, pte);
+
+	if (physical_address) {
+		*physical_address = (pte.page_frame_address << 12) | la.offset;
+	}
+	return 1;
+}
+int i80386_address_translation(I80386* cpu, uint32_t base, uint32_t offset, int is_write, uint32_t* physical_address) {
+	uint32_t linear_address = 0;
+	if (!i80386_segment_translation(cpu, base, offset, &linear_address)) {
+		return 0;
+	}
+	if (cpu->cr0.pg) {
+		if (!i80386_page_translation(cpu, linear_address, is_write, physical_address)) {
+			return 0;
+		}
+	}
+	else {
+		*physical_address = linear_address;
+	}
 	return 1;
 }
 
 /* Opcodes */
 
-static void add_rm_imm(I80286* cpu) {
-	/* add r/m, imm (80/81/82/83, R/M reg = b000) b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16(cpu, i80286_alu_add16);
-		}
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16(cpu, i80286_alu_add16);
-		}
-	}
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8(cpu, i80286_alu_add8);
-	}
+static void add_rm_imm(I80386* cpu) {
+	/* add Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b000) b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_add8, i80386_alu_add16, i80386_alu_add32, WB, SE);
 }
-static void add_rm_reg(I80286* cpu) {
-	/* add r/m, reg (00/01/02/03) b000000DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16(cpu, i80286_alu_add16);
-	}
-	else {
-		exec_bin_op8(cpu, i80286_alu_add8);
-	}
+static void add_rm_reg(I80386* cpu) {
+	/* add Eb<->Gb / Ev<->Gv - (00/01/02/03) b000000DW */
+	exec_bin_rm_reg(cpu, i80386_alu_add8, i80386_alu_add16, i80386_alu_add32, WB);
 }
-static void add_accum_imm(I80286* cpu) {
-	/* add AL/AX, imm (04/05) b0000010W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_add16(cpu, &AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_add8(cpu, &AL, imm);
-	}
+static void add_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (04/05) b0000010W */
+	exec_bin_accum_imm(cpu, i80386_alu_add8, i80386_alu_add16, i80386_alu_add32);
 }
 
-static void or_rm_imm(I80286* cpu) {
-	/* or r/m, imm (80/81/82/83, R/M reg = b001) b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16(cpu, i80286_alu_or16);
-		}
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16(cpu, i80286_alu_or16);
-		}
-	}
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8(cpu, i80286_alu_or8);
-	}
+static void or_rm_imm(I80386* cpu) {
+	/* or Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b001) b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_or8, i80386_alu_or16, i80386_alu_or32, WB, SE);
 }
-static void or_rm_reg(I80286* cpu) {
-	/* or r/m, reg (08/0A/09/0B) b000010DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16(cpu, i80286_alu_or16);
-	}
-	else {
-		exec_bin_op8(cpu, i80286_alu_or8);
-	}
+static void or_rm_reg(I80386* cpu) {
+	/* or Eb<->Gb / Ev<->Gv - (08/0A/09/0B) b000010DW */
+	exec_bin_rm_reg(cpu, i80386_alu_or8, i80386_alu_or16, i80386_alu_or32, WB);
 }
-static void or_accum_imm(I80286* cpu) {
-	/* or AL/AX, imm (0C/0D) b0000110W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_or16(cpu, &AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_or8(cpu, &AL, imm);
-	}
+static void or_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (0C/0D) b0000110W */
+	exec_bin_accum_imm(cpu, i80386_alu_or8, i80386_alu_or16, i80386_alu_or32);
 }
 
-static void adc_rm_imm(I80286* cpu) {
-	/* adc r/m, imm (80/81/82/83, R/M reg = b010) b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16(cpu, i80286_alu_adc16);
-		}
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16(cpu, i80286_alu_adc16);
-		}
-	}
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8(cpu, i80286_alu_adc8);
-	}
+static void adc_rm_imm(I80386* cpu) {
+	/* adc Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b010) b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_adc8, i80386_alu_adc16, i80386_alu_adc32, WB, SE);
 }
-static void adc_rm_reg(I80286* cpu) {
-	/* adc r/m, reg (10/12/11/13) b000100DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16(cpu, i80286_alu_adc16);
-	}
-	else {
-		exec_bin_op8(cpu, i80286_alu_adc8);
-	}
+static void adc_rm_reg(I80386* cpu) {
+	/* adc Eb<->Gb / Ev<->Gv - (10/12/11/13) b000100DW */
+	exec_bin_rm_reg(cpu, i80386_alu_adc8, i80386_alu_adc16, i80386_alu_adc32, WB);
 }
-static void adc_accum_imm(I80286* cpu) {
-	/* adc AL/AX, imm (14/15) b0001010W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_adc16(cpu, &AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_adc8(cpu, &AL, imm);
-	}
+static void adc_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (14/15) b0001010W */
+	exec_bin_accum_imm(cpu, i80386_alu_adc8, i80386_alu_adc16, i80386_alu_adc32);
 }
 
-static void sbb_rm_imm(I80286* cpu) {
-	/* sbb r/m, imm (80/81/82/83, R/M reg = b011)  b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16(cpu, i80286_alu_sbb16);
-		} 
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16(cpu, i80286_alu_sbb16);
-		} 
-	}
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8(cpu, i80286_alu_sbb8);
-	}
+static void sbb_rm_imm(I80386* cpu) {
+	/* sbb Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b011)  b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_sbb8, i80386_alu_sbb16, i80386_alu_sbb32, WB, SE);
 }
-static void sbb_rm_reg(I80286* cpu) {
-	/* sbb r/m, reg (18/1A/19/1B) b000110DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16(cpu, i80286_alu_sbb16);
-	}
-	else {
-		exec_bin_op8(cpu, i80286_alu_sbb8);
-	}
+static void sbb_rm_reg(I80386* cpu) {
+	/* sbb Eb<->Gb / Ev<->Gv - (18/1A/19/1B) b000110DW */
+	exec_bin_rm_reg(cpu, i80386_alu_sbb8, i80386_alu_sbb16, i80386_alu_sbb32, WB);
 }
-static void sbb_accum_imm(I80286* cpu) {
-	/* sbb AL/AX, imm (1C/1D) b0001110W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_sbb16(cpu, &AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_sbb8(cpu, &AL, imm);
-	}
+static void sbb_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (1C/1D) b0001110W */
+	exec_bin_accum_imm(cpu, i80386_alu_sbb8, i80386_alu_sbb16, i80386_alu_sbb32);
 }
 
-static void and_rm_imm(I80286* cpu) {
-	/* and r/m, imm (80/81/82/83, R/M reg = b100) b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16(cpu, i80286_alu_and16);
-		}
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16(cpu, i80286_alu_and16);
-		}
-	}
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8(cpu, i80286_alu_and8);
-	}
+static void and_rm_imm(I80386* cpu) {
+	/* and Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b100) b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_and8, i80386_alu_and16, i80386_alu_and32, WB, SE);
 }
-static void and_rm_reg(I80286* cpu) {
-	/* and r/m, reg (20/22/21/23) b001000DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16(cpu, i80286_alu_and16);
-	}
-	else {
-		exec_bin_op8(cpu, i80286_alu_and8);
-	}
+static void and_rm_reg(I80386* cpu) {
+	/* and Eb<->Gb / Ev<->Gv - (20/22/21/23) b001000DW */
+	exec_bin_rm_reg(cpu, i80386_alu_and8, i80386_alu_and16, i80386_alu_and32, WB);
 }
-static void and_accum_imm(I80286* cpu) {
-	/* and AL/AX, imm (24/25) b0010010W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_and16(cpu, &AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_and8(cpu, &AL, imm);
-	}
+static void and_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (24/25) b0010010W */
+	exec_bin_accum_imm(cpu, i80386_alu_and8, i80386_alu_and16, i80386_alu_and32);
 }
 
-static void sub_rm_imm(I80286* cpu) {
-	/* sub r/m, imm (80/81, R/M reg = b101) b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16(cpu, i80286_alu_sub16);
-		}
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16(cpu, i80286_alu_sub16);
-		}
-	}
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8(cpu, i80286_alu_sub8);
-	}
+static void sub_rm_imm(I80386* cpu) {
+	/* sub Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b101) b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_sub8, i80386_alu_sub16, i80386_alu_sub32, WB, SE);
 }
-static void sub_rm_reg(I80286* cpu) {
-	/* sub r/m, reg (28/2A/29/2B) b001010DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16(cpu, i80286_alu_sub16);
-	}
-	else {
-		exec_bin_op8(cpu, i80286_alu_sub8);
-	}
+static void sub_rm_reg(I80386* cpu) {
+	/* sub Eb<->Gb / Ev<->Gv - (28/2A/29/2B) b001010DW */
+	exec_bin_rm_reg(cpu, i80386_alu_sub8, i80386_alu_sub16, i80386_alu_sub32, WB);
 }
-static void sub_accum_imm(I80286* cpu) {
-	/* sub AL/AX, imm (2C/2D) b0010110W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_sub16(cpu, &AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_sub8(cpu, &AL, imm);
-	}
+static void sub_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (2C/2D) b0010110W */
+	exec_bin_accum_imm(cpu, i80386_alu_sub8, i80386_alu_sub16, i80386_alu_sub32);
 }
 
-static void xor_rm_imm(I80286* cpu) {
-	/* xor r/m, imm (80/81/82/83, R/M reg = b110) b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16(cpu, i80286_alu_xor16);
-		}
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16(cpu, i80286_alu_xor16);
-		}
+static void xor_rm_imm(I80386* cpu) {
+	/* xor Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b110) b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_xor8, i80386_alu_xor16, i80386_alu_xor32, WB, SE);
+}
+static void xor_rm_reg(I80386* cpu) {
+	/* xor Eb<->Gb / Ev<->Gv - (30/32/31/33) b001100DW */
+	exec_bin_rm_reg(cpu, i80386_alu_xor8, i80386_alu_xor16, i80386_alu_xor32, WB);
+}
+static void xor_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (34/35) b0011010W */
+	exec_bin_accum_imm(cpu, i80386_alu_xor8, i80386_alu_xor16, i80386_alu_xor32);
+}
+
+static void cmp_rm_imm(I80386* cpu) {
+	/* cmp Eb,Ib / Ev,Iv / Ev,Ib - (80/81/82/83, R/M reg = b111)  b100000SW */
+	exec_bin_rm_imm(cpu, i80386_alu_cmp8, i80386_alu_cmp16, i80386_alu_cmp32, RO, SE);
+}
+static void cmp_rm_reg(I80386* cpu) {
+	/* cmp Eb<->Gb / Ev<->Gv - (38/39/3A/3B) b001110DW */
+	exec_bin_rm_reg(cpu, i80386_alu_cmp8, i80386_alu_cmp16, i80386_alu_cmp32, RO);
+}
+static void cmp_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (3C/3D) b0011110W */
+	exec_bin_accum_imm(cpu, i80386_alu_cmp8, i80386_alu_cmp16, i80386_alu_cmp32);
+}
+
+static void test_rm_imm(I80386* cpu) {
+	/* test Eb,Ib / Ev,Iv - (F6/F7, R/M reg = b000) b1111011W */
+	exec_bin_rm_imm(cpu, i80386_alu_test8, i80386_alu_test16, i80386_alu_test32, RO, ZE);
+}
+static void test_rm_reg(I80386* cpu) {
+	/* test Eb<->Gb / Ev<->Gv - (84/85) b1000010W */
+	exec_bin_rm_reg(cpu, i80386_alu_test8, i80386_alu_test16, i80386_alu_test32, RO);
+}
+static void test_accum_imm(I80386* cpu) {
+	/* AL,Ib / eAX,Iv - (A8/A9) b1010100W */
+	exec_bin_accum_imm(cpu, i80386_alu_test8, i80386_alu_test16, i80386_alu_test32);
+}
+
+static void daa(I80386* cpu) {
+	/* Decimal Adjust for Addition - daa - (27) b00100111 */
+	i80386_alu_daa(cpu, &cpu->al);
+}
+static void das(I80386* cpu) {
+	/* Decimal Adjust for Subtraction - das - (2F) b00101111 */
+	i80386_alu_das(cpu, &cpu->al);
+}
+static void aaa(I80386* cpu) {
+	/* ASCII Adjust for Addition - aaa - (37) b00110111 */
+	i80386_alu_aaa(cpu, &cpu->ax);
+}
+static void aas(I80386* cpu) {
+	/* ASCII Adjust for Subtraction - aas - (3F) b00111111 */
+	i80386_alu_aas(cpu, &cpu->ax);
+}
+static void aam(I80386* cpu) {
+	/* ASCII Adjust for Multiply - aam Ib - (D4) b11010100 */
+	uint8_t divisor = 0; /* undocumented operand; should be 0x0A */
+	if (!fetch_byte(cpu, &divisor)) {
+		return;
 	} 
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8(cpu, i80286_alu_xor8);
-	}
+	i80386_alu_aam(cpu, &cpu->ax, divisor);
 }
-static void xor_rm_reg(I80286* cpu) {
-	/* xor r/m, reg (30/32/31/33) b001100DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16(cpu, i80286_alu_xor16);
-	}
-	else {
-		exec_bin_op8(cpu, i80286_alu_xor8);
-	}
-}
-static void xor_accum_imm(I80286* cpu) {
-	/* xor AL/AX, imm (34/35) b0011010W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_xor16(cpu, &AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_xor8(cpu, &AL, imm);
-	}
-}
-
-static void cmp_rm_imm(I80286* cpu) {
-	/* cmp r/m, imm (80/81/82/83, R/M reg = b111)  b100000SW */
-	if (W) {
-		if (S) {
-			/* reg16, disp8 - 0x83 is 8bit sign extended to 16bit */
-			exec_bin_rm_imm8_op16_ro(cpu, i80286_alu_cmp16);
-		}
-		else {
-			/* reg16, disp16 - 0x81 */
-			exec_bin_rm_imm_op16_ro(cpu, i80286_alu_cmp16);
-		}
-	}
-	else {
-		/* reg8, disp8 - 0x80, 0x82 */
-		exec_bin_rm_imm_op8_ro(cpu, i80286_alu_cmp8);
-	}
-}
-static void cmp_rm_reg(I80286* cpu) {
-	/* cmp r/m, reg (38/39/3A/3B) b001110DW */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16_ro(cpu, i80286_alu_cmp16);
-	}
-	else {
-		exec_bin_op8_ro(cpu, i80286_alu_cmp8);
-	}
-}
-static void cmp_accum_imm(I80286* cpu) {
-	/* cmp AL/AX, imm (3C/3D) b0011110W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_cmp16(cpu, AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_cmp8(cpu, AL, imm);
-	}
-}
-
-static void test_rm_imm(I80286* cpu) {
-	/* test r/m, imm (F6/F7, R/M reg = b000) b1111011W */
-	if (W) {
-		exec_bin_rm_imm_op16_ro(cpu, i80286_alu_test16);
-	}
-	else {
-		exec_bin_rm_imm_op8_ro(cpu, i80286_alu_test8);
-	}
-}
-static void test_rm_reg(I80286* cpu) {
-	/* test r/m, reg (84/85) b1000010W */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (W) {
-		exec_bin_op16_ro(cpu, i80286_alu_test16);
-	}
-	else {
-		exec_bin_op8_ro(cpu, i80286_alu_test8);
-	}
-}
-static void test_accum_imm(I80286* cpu) {
-	/* test AL/AX, imm (A8/A9) b1010100W */
-	if (W) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_test16(cpu, AX, imm);
-	}
-	else {
-		uint8_t imm = 0;
-		if (!fetch_byte(cpu, &imm)) {
-			return;
-		}
-		i80286_alu_test8(cpu, AL, imm);
-	}
-}
-
-static void daa(I80286* cpu) {
-	/* Decimal Adjust for Addition (27) b00100111 */
-	i80286_alu_daa(cpu, &AL);
-}
-static void das(I80286* cpu) {
-	/* Decimal Adjust for Subtraction (2F) b00101111 */
-	i80286_alu_das(cpu, &AL);
-}
-static void aaa(I80286* cpu) {
-	/* ASCII Adjust for Addition (37) b00110111 */
-	i80286_alu_aaa(cpu, &AL, &AH);
-}
-static void aas(I80286* cpu) {
-	/* ASCII Adjust for Subtraction (3F) b00111111 */
-	i80286_alu_aas(cpu, &AL, &AH);
-}
-static void aam(I80286* cpu) {
-	/* ASCII Adjust for Multiply (D4 0A) b11010100 00001010 */
-	uint8_t divisor = 0;
+static void aad(I80386* cpu) {
+	/* ASCII Adjust for Division - aad Ib - (D5) b11010101 */
+	uint8_t divisor = 0; /* undocumented operand; should be 0x0A */
 	if (!fetch_byte(cpu, &divisor)) {
 		return;
-	} /* undocumented operand; normally 0x0A */
-	i80286_alu_aam(cpu, &AL, &AH, divisor);
+	} 
+	i80386_alu_aad(cpu, &cpu->ax, divisor);
 }
-static void aad(I80286* cpu) {
-	/* ASCII Adjust for Division (D5 0A) b11010101 00001010 */
-	uint8_t divisor = 0;
-	if (!fetch_byte(cpu, &divisor)) {
+static void salc(I80386* cpu) {
+	/* set carry in AL - salc - (D6) b11010110 (undocumented opcode) */
+
+	/* lock prefix throws #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
-	} /* undocumented operand; normally 0x0A */
-	i80286_alu_aad(cpu, &AL, &AH, divisor);
-}
-static void salc(I80286* cpu) {
-	/* set carry in AL (D6) b11010110 undocumented opcode */
-	if (CF) {
-		AL = 0xFF;
+	}
+
+	if (cpu->psw.cf) {
+		cpu->al = 0xFF;
 	}
 	else {
-		AL = 0;
+		cpu->al = 0;
 	}
 }
 
-static void push_seg(I80286* cpu) {
-	/* Push seg16 (06/0E/16/1E) b000SR110 */
-	push_word(cpu, cpu->segments[SR].selector);
+static void push_seg(I80386* cpu) {
+	/* Push seg16 - (06/0E/16/1E/A0/A8) bX0ESRXXX */
+	uint8_t esr = ESR;
+	if (esr < I80386_SEGMENT_COUNT) {
+		push_word(cpu, cpu->segment_registers[esr].selector);
+	}
 }
-static void pop_seg(I80286* cpu) {
-	/* Pop seg16 (07/0F/17/1F) b000SR111 */
-	pop_word(cpu, &cpu->segments[SR].selector);
-
-	/* Interrupts Following 'POP SS' May Corrupt Memory. On early Intel 8088 processors
-		(marked "INTEL '78" or "(C) 1978"), if an interrupt occurs immediately after a
-		'POP SS' instruction, data may be pushed using an incorrect stack address,
-		resulting in memory corruption. */
-	cpu->int_delay = 1;
+static void pop_seg(I80386* cpu) {
+	/* Pop seg16 (07/0F/17/1F/A1/A9) bX0ESRXXX */
+	uint8_t esr = ESR;
+	uint16_t selector = 0;
+	if (!pop_word(cpu, &selector)) {
+		return;
+	}
+	if (!i80386_load_segment_register(cpu, &cpu->segment_registers[esr], esr, selector)) {
+		return;
+	}
+	if (esr == SEG_SS) {
+		cpu->int_delay = 1;
+	}
 }
-static void push_reg(I80286* cpu) {
+static void push_reg(I80386* cpu) {
 	/* Push reg16 (50-57) b01010REG */
 
-	/* The 80286 PUSH SP instruction pushes
+	/* The 80386 PUSH SP instruction pushes
 	   the value of SP as it existed before the
 	   instruction. This differs from the 8086. */
 
-	uint16_t tmp = reg16_read(cpu, cpu->opcode);
-	SP -= 2;
-	write_word(cpu, SS, SP, tmp);
+	if (cpu->operand_size) {
+		uint32_t tmp = reg32_read(cpu, cpu->opcode);
+		if (cpu->address_size) {
+			cpu->esp -= 4;
+			write_dword_sreg(cpu, SEG_SS, cpu->esp, tmp);
+		}
+		else {
+			cpu->sp -= 4;
+			write_dword_sreg(cpu, SEG_SS, cpu->sp, tmp);
+		}
+
+	}
+	else {
+		uint16_t tmp = reg16_read(cpu, cpu->opcode);
+		if (cpu->address_size) {
+			cpu->esp -= 2;
+			write_word_sreg(cpu, SEG_SS, cpu->esp, tmp);
+		}
+		else {
+			cpu->sp -= 2;
+			write_word_sreg(cpu, SEG_SS, cpu->sp, tmp);
+		}
+	}
 }
-static void pop_reg(I80286* cpu) {
+static void pop_reg(I80386* cpu) {
 	/* Pop reg16 (58-5F) b01011REG */
-	uint16_t tmp = 0;
-	read_word(cpu, SS, SP, &tmp);
-	SP += 2;
-	reg16_write(cpu, cpu->opcode, tmp);
+	if (cpu->operand_size) {
+		uint32_t tmp = 0;
+		if (cpu->address_size) {
+			read_dword_sreg(cpu, SEG_SS, cpu->esp, &tmp);
+			cpu->esp += 4;
+		}
+		else {
+			read_dword_sreg(cpu, SEG_SS, cpu->sp, &tmp);
+			cpu->sp += 4;
+		}
+		reg32_write(cpu, cpu->opcode, tmp);
+	}
+	else {
+		uint16_t tmp = 0;
+		if (cpu->address_size) {
+			read_word_sreg(cpu, SEG_SS, cpu->esp, &tmp);
+			cpu->esp += 2;
+		}
+		else {
+			read_word_sreg(cpu, SEG_SS, cpu->sp, &tmp);
+			cpu->sp += 2;
+		}
+		reg16_write(cpu, cpu->opcode, tmp);
+	}
 }
-static void push_rm(I80286* cpu) {
+static void push_rm(I80386* cpu) {
 	/* Push R/M (FF, R/M reg = 110) b11111111 */
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
+	I80386_OPERAND rm = { 0 };
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
-	push_op16(cpu, rm);
+	
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	if (cpu->operand_size) {
+		push_op32(cpu, &rm);
+	}
+	else {
+		push_op16(cpu, &rm);
+	}
 }
-static void pop_rm(I80286* cpu) {
+static void pop_rm(I80386* cpu) {
 	/* Pop R/M (8F) b10001111 */
+	I80386_OPERAND rm = { 0 };
+
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
-
-	if (cpu->modrm.u.bits.reg != 0) {
-		i80286_exception(cpu, EXCEPTION_UD); /* reg bits are reserved */
+	if (!modrm_get_rm(cpu, &rm)) {
 		return;
 	}
 
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
+	/* reg bits are reserved */
+	if (cpu->modrm.reg != 0) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
-	pop_op16(cpu, rm);
+
+	if (cpu->operand_size) {
+		pop_op32(cpu, &rm);
+	}
+	else {
+		pop_op16(cpu, &rm);
+	}
 }
-static void pushf(I80286* cpu) {
+static void pushf(I80386* cpu) {
 	/* push psw (9C) b10011100 */
-	PSW &= 0xFFD7;
-	push_word(cpu, PSW);
+	cpu->psw.word &= 0xFFD7;
+	push_word(cpu, cpu->psw.word);
 }
-static void popf(I80286* cpu) {
-	/* pop psw (9D) b10011101 */
-	uint16_t psw = 0;
-	pop_word(cpu, &psw);
-	PSW = (psw | 0x0002) & 0x0FD7;
+static void popf(I80386* cpu) {
+	/* popf (9D) b10011101 */
+	I80386_PROGRAM_STATUS_WORD psw = { 0 };
+	pop_word(cpu, &psw.word);
+	cpu->psw.word = (psw.word | 0x0002) & 0x0FD7;
+	
+	/* POPF many only alter IF cpl <= iopl */
+	if (cpu->cpl <= cpu->psw.iopl) {
+		cpu->psw.in = psw.in;
+	}
 }
-static void pusha(I80286* cpu) {
+static void pusha(I80386* cpu) {
 	/* push all (60) b01100000 */
-	uint16_t sp = SP;
+	uint32_t esp = cpu->esp;
+	uint32_t len = (0x10 << cpu->operand_size);
 
-	if (((sp - 0x10) & 0xFFFF) == 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
+	if (cpu->address_size) {
+		if ((esp - len) >= cpu->ss.desc.limit) {
+			i80386_exception(cpu, EXCEPTION_GP);
+			return;
+		}
+	}
+	else {
+		if (((esp - len) & 0xFFFF) >= cpu->ss.desc.limit) {
+			i80386_exception(cpu, EXCEPTION_GP);
+			return;
+		}
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
 
-	push_word(cpu, AX);
-	push_word(cpu, CX);
-	push_word(cpu, DX);
-	push_word(cpu, BX);
-	push_word(cpu, sp); /* Push OLD sp */
-	push_word(cpu, BP);
-	push_word(cpu, SI);
-	push_word(cpu, DI);
+	if (cpu->operand_size) {
+		push_dword(cpu, cpu->eax);
+		push_dword(cpu, cpu->ecx);
+		push_dword(cpu, cpu->edx);
+		push_dword(cpu, cpu->ebx);
+		push_dword(cpu, esp); /* Push OLD esp */
+		push_dword(cpu, cpu->ebp);
+		push_dword(cpu, cpu->esi);
+		push_dword(cpu, cpu->edi);
+	}
+	else {
+		push_word(cpu, cpu->ax);
+		push_word(cpu, cpu->cx);
+		push_word(cpu, cpu->dx);
+		push_word(cpu, cpu->bx);
+		push_word(cpu, esp & 0xFFFF); /* Push OLD sp */
+		push_word(cpu, cpu->bp);
+		push_word(cpu, cpu->si);
+		push_word(cpu, cpu->di);
+	}
 }
-static void popa(I80286* cpu) {
-	/* pop all (61) b01100001 */
-	uint16_t sp = SP;
+static void popa(I80386* cpu) {
+	/* pop all - popa - (61) b01100001 */
+	uint32_t esp = cpu->esp;
+	uint32_t len = (0x10 << cpu->operand_size) - 2;
 
-	if (sp == 0xFFFF || sp + 0xE == 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
 
-	pop_word(cpu, &DI);
-	pop_word(cpu, &SI);
-	pop_word(cpu, &BP);
-	pop_word(cpu, &sp); /* discard sp */
-	pop_word(cpu, &BX);
-	pop_word(cpu, &DX);
-	pop_word(cpu, &CX);
-	pop_word(cpu, &AX);
+	if (cpu->address_size) {
+		if ((esp + len) >= cpu->ss.desc.limit) {
+			i80386_exception(cpu, EXCEPTION_SS);
+			return;
+		}
+	}
+	else {
+		if (((esp + len) & 0xFFFF) >= cpu->ss.desc.limit) {
+			i80386_exception(cpu, EXCEPTION_SS);
+			return;
+		}
+	}
+
+	if (cpu->operand_size) {		
+		pop_dword(cpu, &cpu->edi);
+		pop_dword(cpu, &cpu->esi);
+		pop_dword(cpu, &cpu->ebp);
+		pop_dword(cpu, &esp); /* discard esp */
+		pop_dword(cpu, &cpu->ebx);
+		pop_dword(cpu, &cpu->edx);
+		pop_dword(cpu, &cpu->ecx);
+		pop_dword(cpu, &cpu->eax);
+	}
+	else {
+		uint16_t sp = 0;
+		pop_word(cpu, &cpu->di);
+		pop_word(cpu, &cpu->si);
+		pop_word(cpu, &cpu->bp);
+		pop_word(cpu, &sp); /* discard sp */
+		pop_word(cpu, &cpu->bx);
+		pop_word(cpu, &cpu->dx);
+		pop_word(cpu, &cpu->cx);
+		pop_word(cpu, &cpu->ax);
+	}	
 }
-static void push_imm(I80286* cpu) {
-	/* Push IMM (68/6A) b011010S0 */
+static void push_imm(I80386* cpu) {
+	/* Push immediate value - Push Iw - (68/6A) b011010S0 */
 
 	if (S) { /* sign extended to 16bit */
 		uint8_t imm = 0;
@@ -1339,1084 +2781,1497 @@ static void push_imm(I80286* cpu) {
 	}
 }
 
-static void enter(I80286* cpu) {
-	/* enter procedure (C8) b11001000 */
-
+static void enter(I80386* cpu) {
+	/* Enter proceedure - enter Iw,Ib - (C8) b11001000 */
 	uint16_t op1 = 0;
 	uint8_t op2 = 0;
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
 
 	if (!fetch_word(cpu, &op1)) {
 		return;
 	}
-
 	if (!fetch_byte(cpu, &op2)) {
 		return;
 	}
 
-	uint16_t bp = BP;
-	uint16_t sp = SP;
+	cpu->effective_address.stack_address = 1;
 
-	uint8_t level = op2 % 32;
+	if (cpu->operand_size) {
+		uint32_t ebp = cpu->ebp;
+		uint16_t sp = cpu->sp;
+		uint8_t level = op2 % 32;
 
-	sp -= 2;
-	if (!write_word(cpu, SS, sp, bp)) {
-		return;
-	}
+		sp -= 4;
+		if (!write_dword_sreg(cpu, SEG_SS, sp, ebp)) {
+			return;
+		}
 
-	uint16_t frame_ptr = sp;
-	uint16_t stack_word = 0;
+		uint32_t frame_ptr = sp;
+		uint32_t stack_dword = 0;
 
-	if (level > 0) {
-		for (int i = 0; i < level - 1; ++i) {
-			bp -= 2;
-			if (!read_word(cpu, SS, bp, &stack_word)) {
+		if (level > 0) {
+			for (int i = 0; i < level - 1; ++i) {
+				ebp -= 4;
+				if (!read_dword_sreg(cpu, SEG_SS, ebp & 0xFFFF, &stack_dword)) {
+					return;
+				}
+
+				sp -= 4;
+				if (!write_dword_sreg(cpu, SEG_SS, sp, stack_dword)) {
+					return;
+				}
+			}
+
+			sp -= 4;
+			if (!write_dword_sreg(cpu, SEG_SS, sp, frame_ptr)) {
 				return;
+			}
+		}
+
+		cpu->ebp = frame_ptr;
+		cpu->esp = (sp - op1) & 0xFFFF;
+	}
+	else {
+		uint16_t bp = cpu->bp;
+		uint16_t sp = cpu->sp;
+		uint8_t level = op2 % 32;
+		sp -= 2;
+		if (!write_word_sreg(cpu, SEG_SS, sp, bp)) {
+			return;
+		}
+
+		uint16_t frame_ptr = sp;
+		uint16_t stack_word = 0;
+
+		if (level > 0) {
+			for (int i = 0; i < level - 1; ++i) {
+				bp -= 2;
+				if (!read_word_sreg(cpu, SEG_SS, bp, &stack_word)) {
+					return;
+				}
+
+				sp -= 2;
+				if (!write_word_sreg(cpu, SEG_SS, sp, stack_word)) {
+					return;
+				}
 			}
 
 			sp -= 2;
-			if (!write_word(cpu, SS, sp, stack_word)) {
+			if (!write_word_sreg(cpu, SEG_SS, sp, frame_ptr)) {
 				return;
 			}
 		}
 
-		sp -= 2;
-		if (!write_word(cpu, SS, sp, frame_ptr)) {
-			return;
-		}
+		cpu->bp = frame_ptr;
+		cpu->sp = sp - op1;
 	}
-
-	BP = frame_ptr;
-	SP = sp - op1;
 }
-static void leave(I80286* cpu) {
-	/* leave procedure (C9) b11001001 */
+static void leave(I80386* cpu) {
+	/* Leave procedure - leave - (C9) b11001001 */
 
-	if (BP == 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
 
-	SP = BP;
-	pop_word(cpu, &BP);
+	if (cpu->operand_size) {
+		if (cpu->bp > cpu->ss.desc.limit - 3U) {
+			i80386_exception(cpu, EXCEPTION_SS);
+			return;
+		}
+		cpu->esp = cpu->bp;
+		pop_dword(cpu, &cpu->ebp);
+	}
+	else {
+		if (cpu->bp > cpu->ss.desc.limit) {
+			i80386_exception(cpu, EXCEPTION_SS);
+			return;
+		}
+		cpu->esp = cpu->bp;
+		pop_word(cpu, &cpu->bp);
+	}
 }
 
-static void nop(I80286* cpu) {
+static void nop(I80386* cpu) {
 	/* nop (90) b10010000 */
 	(void)cpu;
 }
-static void xchg_accum_reg(I80286* cpu) {
-	/* xchg AX, reg16 (91 - 97) b10010REG */	
-	uint16_t tmp = AX;
-	AX = reg16_read(cpu, cpu->opcode);
-	reg16_write(cpu, cpu->opcode, tmp);
+static void xchg_accum_reg(I80386* cpu) {
+	/* xchg AX/EAX, reg16/reg32 (91-97) b10010REG */
+	if (cpu->operand_size) {
+		uint32_t tmp = cpu->eax;
+		cpu->eax = reg32_read(cpu, cpu->opcode);
+		reg32_write(cpu, cpu->opcode, tmp);
+	}
+	else {
+		uint16_t tmp = cpu->ax;
+		cpu->ax = reg16_read(cpu, cpu->opcode);
+		reg16_write(cpu, cpu->opcode, tmp);
+	}
 }
-static void xchg_rm_reg(I80286* cpu) {
-	/* xchg R/M, reg8/16 (86/87) b1000011W */
+static void xchg_rm_reg(I80386* cpu) {
+	/* xchg R/M, reg8/16/32 (86/87) b1000011W */
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
 	if (W) {
-		OPERAND16 rm = { 0 };
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
+		if (cpu->operand_size) {
+			I80386_OPERAND rm = { 0 };
+			if (!modrm_get_rm(cpu, &rm)) {
+				return;
+			}
+			uint32_t reg = modrm_read_reg32(cpu);
+			uint32_t tmp = 0;
+			if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+				return;
+			}
+			if (!modrm_write_rm32(cpu, &rm, reg)) {
+				return;
+			}
+			modrm_write_reg32(cpu, tmp);
 		}
-		uint16_t reg = modrm_read_reg16(cpu);
-		uint16_t tmp = 0;
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
+		else {
+			I80386_OPERAND rm = { 0 };
+			if (!modrm_get_rm(cpu, &rm)) {
+				return;
+			}
+			uint16_t reg = modrm_read_reg16(cpu);
+			uint16_t tmp = 0;
+			if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+				return;
+			}
+			if (!modrm_write_rm16(cpu, &rm, reg)) {
+				return;
+			}
+			modrm_write_reg16(cpu, tmp);
 		}
-		if (!modrm_write_rm16(cpu, rm, reg)) {
-			return;
-		}
-		modrm_write_reg16(cpu, tmp);
 	}
 	else {
-		OPERAND8 rm = { 0 };
-		if (!modrm_get_rm8(cpu, &rm)) {
+		I80386_OPERAND rm = { 0 };
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
 		uint8_t reg = modrm_read_reg8(cpu);
 		uint8_t tmp = 0;
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
 			return;
 		}
-		if (!modrm_write_rm8(cpu, rm, reg)) {
+		if (!modrm_write_rm8(cpu, &rm, reg)) {
 			return;
 		}
 		modrm_write_reg8(cpu, tmp);
 	}
 }
 
-static void cbw(I80286* cpu) {
+static void cbw(I80386* cpu) {
 	/* Convert byte to word (98) b10011000 */
-	if (AL & 0x80) {
-		AH = 0xFF;
+	if (cpu->al & 0x80) {
+		cpu->ah = 0xFF;
 	}
 	else {
-		AH = 0;
+		cpu->ah = 0;
 	}
 }
-static void cwd(I80286* cpu) {
+static void cwd(I80386* cpu) {
 	/* Convert word to dword (99) b10011001 */
-	if (AX & 0x8000) {
-		DX = 0xFFFF;
+	if (cpu->ax & 0x8000) {
+		cpu->dx = 0xFFFF;
 	}
 	else {
-		DX = 0;
+		cpu->dx = 0;
 	}
 }
 
-static void wait(I80286* cpu) {
+static void wait(I80386* cpu) {
 	/* wait (9B) b10011011 */
-	/*if (!cpu->test) {
-		IP -= cpu->instruction_len;
-	}*/
+#if 0
+	if (!cpu->test) {
+		i80386_rollback_instruction(cpu); /* test pin */
+	}
+#endif
 	(void)cpu;
 }
 
-static void sahf(I80286* cpu) {
+static void sahf(I80386* cpu) {
 	/* Store AH into flags (9E) b10011110 */
-	PSW &= 0xFF02; /* Mask hi byte; Clear bit 2 */
-	PSW |= AH & 0xD5;
+	cpu->psw.word &= 0xFF02; /* Mask hi byte; Clear bit 2 */
+	cpu->psw.word |= cpu->ah & 0xD5;
 }
-static void lahf(I80286* cpu) {
+static void lahf(I80386* cpu) {
 	/* Load flags into AH (9F) b10011111 */
-	AH = PSW & 0xD7;
+	cpu->ah = cpu->psw.word & 0xD7;
 }
 
-static void hlt(I80286* cpu) {
+static void hlt(I80386* cpu) {
 	/* Halt CPU (F4) b11110100 */
 	cpu->halt = 1;
-	//IP -= cpu->instruction_len;
+	i80386_rollback_instruction(cpu);
 }
-static void cmc(I80286* cpu) {
+static void cmc(I80386* cpu) {
 	/* Complement carry flag (F5) b11110101 */
-	CF = !CF;
+	cpu->psw.cf = !cpu->psw.cf;
 }
-static void clc(I80286* cpu) {
+static void clc(I80386* cpu) {
 	/* clear carry flag (F8) b11111000 */
-	CF = 0;
+	cpu->psw.cf = 0;
 }
-static void stc(I80286* cpu) {
+static void stc(I80386* cpu) {
 	/* set carry flag (F9) b11111001 */
-	CF = 1;
+	cpu->psw.cf = 1;
 }
-static void cli(I80286* cpu) {
+static void cli(I80386* cpu) {
 	/* clear interrupt flag (FA) b11111010 */
-	IF = 0;
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+	cpu->psw.in = 0;
 }
-static void sti(I80286* cpu) {
+static void sti(I80386* cpu) {
 	/* set interrupt flag (FB) b1111011 */
-	IF = 1;
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+	cpu->psw.in = 1;
 }
-static void cld(I80286* cpu) {
+static void cld(I80386* cpu) {
 	/* clear direction flag (FC) b11111100 */
-	DF = 0;
+	cpu->psw.df = 0;
 }
-static void std(I80286* cpu) {
+static void std(I80386* cpu) {
 	/* set direction flag (FD) b11111101 */
-	DF = 1;
+	cpu->psw.df = 1;
 }
 
-static void inc_reg(I80286* cpu) {
+static void inc_reg(I80386* cpu) {
 	/* Inc reg16 (40-47) b01000REG */
 	uint16_t tmp = reg16_read(cpu, cpu->opcode);
-	i80286_alu_inc16(cpu, &tmp);
+	i80386_alu_inc16(cpu, &tmp);
 	reg16_write(cpu, cpu->opcode, tmp);
 }
-static void inc_rm(I80286* cpu) {
+static void inc_rm(I80386* cpu) {
 	/* Inc R/M (FE/FF, R/M reg = 000) b1111111W */
 	if (W) {
-		OPERAND16 rm = { 0 };
+		I80386_OPERAND rm = { 0 };
 		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
 			return;
 		}
-		i80286_alu_inc16(cpu, &tmp);
-		modrm_write_rm16(cpu, rm, tmp);
+		i80386_alu_inc16(cpu, &tmp);
+		modrm_write_rm16(cpu, &rm, tmp);
 	}
 	else {
-		OPERAND8 rm = { 0 };
+		I80386_OPERAND rm = { 0 };
 		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
 			return;
 		}
-		i80286_alu_inc8(cpu, &tmp);
-		modrm_write_rm8(cpu, rm, tmp);
+		i80386_alu_inc8(cpu, &tmp);
+		modrm_write_rm8(cpu, &rm, tmp);
 	}
 }
 
-static void dec_reg(I80286* cpu) {
+static void dec_reg(I80386* cpu) {
 	/* Dec reg16 (48-4F) b01001REG */
 	uint16_t tmp = reg16_read(cpu, cpu->opcode);
-	i80286_alu_dec16(cpu, &tmp);
+	i80386_alu_dec16(cpu, &tmp);
 	reg16_write(cpu, cpu->opcode, tmp);
 }
-static void dec_rm(I80286* cpu) {
+static void dec_rm(I80386* cpu) {
 	/* Dec R/M (FE/FF, R/M reg = 001) b1111111W */
 	if (W) {
-		OPERAND16 rm = { 0 };
+		I80386_OPERAND rm = { 0 };
 		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
 			return;
 		}
-		i80286_alu_dec16(cpu, &tmp);
-		modrm_write_rm16(cpu, rm, tmp);
+		i80386_alu_dec16(cpu, &tmp);
+		modrm_write_rm16(cpu, &rm, tmp);
 	}
 	else {
-		OPERAND8 rm = { 0 };
+		I80386_OPERAND rm = { 0 };
 		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
 			return;
 		}
-		i80286_alu_dec8(cpu, &tmp);
-		modrm_write_rm8(cpu, rm, tmp);
+		i80386_alu_dec8(cpu, &tmp);
+		modrm_write_rm8(cpu, &rm, tmp);
 	}
 }
 
-static void rol(I80286* cpu) {
+static void rol_rm_cl(I80386* cpu) {
 	/* Rotate left (D0/D1/D2/D3, R/M reg = 000) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rol16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rol8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_cl(cpu, i80386_alu_rol8, i80386_alu_rol16, i80386_alu_rol32);
 }
-static void ror(I80286* cpu) {
+static void ror_rm_cl(I80386* cpu) {
 	/* Rotate left (D0/D1/D2/D3, R/M reg = 001) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_ror16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_ror8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_cl(cpu, i80386_alu_ror8, i80386_alu_ror16, i80386_alu_ror32);
 }
-static void rcl(I80286* cpu) {
+static void rcl_rm_cl(I80386* cpu) {
 	/* Rotate through carry left (D0/D1/D2/D3, R/M reg = 010) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcl16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcl8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_cl(cpu, i80386_alu_rcl8, i80386_alu_rcl16, i80386_alu_rcl32);
 }
-static void rcr(I80286* cpu) {
+static void rcr_rm_cl(I80386* cpu) {
 	/* Rotate through carry right (D0/D1/D2/D3, R/M reg = 011) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcr16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcr8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_cl(cpu, i80386_alu_rcr8, i80386_alu_rcr16, i80386_alu_rcr32);
 }
-static void shl(I80286* cpu) {
+static void shl_rm_cl(I80386* cpu) {
 	/* Shift left (D0/D1/D2/D3, R/M reg = 100) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shl16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shl8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_cl(cpu, i80386_alu_shl8, i80386_alu_shl16, i80386_alu_shl32);
 }
-static void shr(I80286* cpu) {
+static void shr_rm_cl(I80386* cpu) {
 	/* Shift Logical right (D0/D1/D2/D3, R/M reg = 101) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shr16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shr8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_cl(cpu, i80386_alu_shr8, i80386_alu_shr16, i80386_alu_shr32);
 }
-static void sal(I80286* cpu) {
+static void sal_rm_cl(I80386* cpu) {
 	/* Shift Arithmetic left (D0/D1/D2/D3, R/M reg = 110) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
-	}
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_sal16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_sal8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_cl(cpu, i80386_alu_sal8, i80386_alu_sal16, i80386_alu_sal32);
 }
-static void sar(I80286* cpu) {
+static void sar_rm_cl(I80386* cpu) {
 	/* Shift Arithmetic right (D0/D1/D2/D3, R/M reg = 111) b110100VW */
-	uint8_t count = 1;
-	if (VW) {
-		count = CL;
+	exec_bin_grp2_cl(cpu, i80386_alu_sar8, i80386_alu_sar16, i80386_alu_sar32);
+}
+static void shld_rm_cl(I80386* cpu) {
+	/* shld Ev,Gv,CL - (0F A5 /r) */
+	I80386_OPERAND rm = { 0 };
+	uint8_t tmp3 = cpu->cl & 0x1F;
+
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
 	}
 
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t tmp = 0;
+		uint32_t tmp2 = 0;
+
+		if (tmp3 >= 32) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &tmp)) {
 			return;
 		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		tmp2 = modrm_read_reg32(cpu);
+
+		i80386_alu_shld32(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm32(cpu, &rm, tmp)) {
 			return;
 		}
-		i80286_alu_sar16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
+		uint16_t tmp = 0;
+		uint16_t tmp2 = 0;
+
+		if (tmp3 >= 16) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
 			return;
 		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		tmp2 = modrm_read_reg16(cpu);
+
+		i80386_alu_shld16(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm16(cpu, &rm, tmp)) {
 			return;
 		}
-		i80286_alu_sar8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
+	}
+}
+static void shrd_rm_cl(I80386* cpu) {
+	/* shrd Ev,Gv,CL - (0F AD /r) */
+	I80386_OPERAND rm = { 0 };
+	uint8_t tmp3 = cpu->cl & 0x1F;
+
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t tmp = 0;
+		uint32_t tmp2 = 0;
+
+		if (tmp3 >= 32) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+			return;
+		}
+		tmp2 = modrm_read_reg32(cpu);
+
+		i80386_alu_shrd32(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm32(cpu, &rm, tmp)) {
+			return;
+		}
+	}
+	else {
+		uint16_t tmp = 0;
+		uint16_t tmp2 = 0;
+
+		if (tmp3 >= 16) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+			return;
+		}
+		tmp2 = modrm_read_reg16(cpu);
+
+		i80386_alu_shrd16(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm16(cpu, &rm, tmp)) {
+			return;
+		}
 	}
 }
 
-static void rol_rm_imm(I80286* cpu) {
+static void rol_rm_imm(I80386* cpu) {
 	/* Rotate left (C0/C1, R/M reg = 000) b1100000W */
-	uint8_t count = 0;
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rol16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rol8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_imm(cpu, i80386_alu_rol8, i80386_alu_rol16, i80386_alu_rol32);
 }
-static void ror_rm_imm(I80286* cpu) {
+static void ror_rm_imm(I80386* cpu) {
 	/* Rotate left (C0/C1, R/M reg = 001) b1100000W */
-	uint8_t count = 0;
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_ror16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_ror8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_imm(cpu, i80386_alu_ror8, i80386_alu_ror16, i80386_alu_ror32);
 }
-static void rcl_rm_imm(I80286* cpu) {
+static void rcl_rm_imm(I80386* cpu) {
 	/* Rotate through carry left (C0/C1, R/M reg = 010) b1100000W */
-	uint8_t count = 0;
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcl16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcl8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_imm(cpu, i80386_alu_rcl8, i80386_alu_rcl16, i80386_alu_rcl32);
 }
-static void rcr_rm_imm(I80286* cpu) {
+static void rcr_rm_imm(I80386* cpu) {
 	/* Rotate through carry right (C0/C1, R/M reg = 011) b1100000W */
-	uint8_t count = 0;
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcr16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_rcr8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_imm(cpu, i80386_alu_rcr8, i80386_alu_rcr16, i80386_alu_rcr32);
 }
-static void shl_rm_imm(I80286* cpu) {
+static void shl_rm_imm(I80386* cpu) {
 	/* Shift left (C0/C1, R/M reg = 100) b1100000W */
-	uint8_t count = 0;
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shl16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shl8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_imm(cpu, i80386_alu_shl8, i80386_alu_shl16, i80386_alu_shl32);
 }
-static void shr_rm_imm(I80286* cpu) {
+static void shr_rm_imm(I80386* cpu) {
 	/* Shift Logical right (C0/C1, R/M reg = 101) b1100000W */
-	uint8_t count = 0;
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shr16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_shr8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_imm(cpu, i80386_alu_shr8, i80386_alu_shr16, i80386_alu_shr32);
 }
-static void sal_rm_imm(I80286* cpu) {
+static void sal_rm_imm(I80386* cpu) {
 	/* Shift Arithmetic left (C0/C1, R/M reg = 110) b1100000W */
-	uint8_t count = 0;
-
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_sal16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!fetch_byte(cpu, &count)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_sal8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
-	}
+	exec_bin_grp2_imm(cpu, i80386_alu_sal8, i80386_alu_sal16, i80386_alu_sal32);
 }
-static void sar_rm_imm(I80286* cpu) {
+static void sar_rm_imm(I80386* cpu) {
 	/* Shift Arithmetic right (C0/C1, R/M reg = 111) b1100000W */
-	uint8_t count = 0;
+	exec_bin_grp2_imm(cpu, i80386_alu_sar8, i80386_alu_sar16, i80386_alu_sar32);
+}
+static void shld_rm_imm(I80386* cpu) {
+	/* shld Ev,Gv,Ib - (0F A4 /r) */
+	I80386_OPERAND rm = { 0 };
+	uint8_t tmp3 = 0;
 
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (!fetch_byte(cpu, &tmp3)) {
+		return;
+	}
+	tmp3 &= 0x1F;
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t tmp = 0;
+		uint32_t tmp2 = 0;
+
+		if (tmp3 >= 32) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &tmp)) {
 			return;
 		}
-		if (!fetch_byte(cpu, &count)) {
+		tmp2 = modrm_read_reg32(cpu);
+
+		i80386_alu_shld32(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm32(cpu, &rm, tmp)) {
 			return;
 		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_sar16(cpu, &tmp, count);
-		modrm_write_rm16(cpu, rm, tmp);
 	}
 	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
+		uint16_t tmp = 0;
+		uint16_t tmp2 = 0;
+
+		if (tmp3 >= 16) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
 			return;
 		}
-		if (!fetch_byte(cpu, &count)) {
+		tmp2 = modrm_read_reg16(cpu);
+
+		i80386_alu_shld16(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm16(cpu, &rm, tmp)) {
 			return;
 		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+	}
+}
+static void shrd_rm_imm(I80386* cpu) {
+	/* shrd Ev,Gv,Ib - (0F AC /r) */
+	I80386_OPERAND rm = { 0 };
+	uint8_t tmp3 = 0;
+
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (!fetch_byte(cpu, &tmp3)) {
+		return;
+	}
+	tmp3 &= 0x1F;
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t tmp = 0;
+		uint32_t tmp2 = 0;
+
+		if (tmp3 >= 32) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &tmp)) {
 			return;
 		}
-		i80286_alu_sar8(cpu, &tmp, count);
-		modrm_write_rm8(cpu, rm, tmp);
+		tmp2 = modrm_read_reg32(cpu);
+
+		i80386_alu_shrd32(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm32(cpu, &rm, tmp)) {
+			return;
+		}
+	}
+	else {
+		uint16_t tmp = 0;
+		uint16_t tmp2 = 0;
+
+		if (tmp3 >= 16) {
+			return; /* UNDEFINED */
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+			return;
+		}
+		tmp2 = modrm_read_reg16(cpu);
+
+		i80386_alu_shrd16(cpu, &tmp, tmp2, tmp3);
+
+		if (!modrm_write_rm16(cpu, &rm, tmp)) {
+			return;
+		}
 	}
 }
 
-static int jump_condition(I80286* cpu) {
-	switch (CCCC) {
-		case JCC_JO:
-			if (OF) return 1;
-			break;
-		case JCC_JNO:
-			if (!OF) return 1;
-			break;
-		case JCC_JC:
-			if (CF) return 1;
-			break;
-		case JCC_JNC:
-			if (!CF) return 1;
-			break;
-		case JCC_JZ:
-			if (ZF) return 1;
-			break;
-		case JCC_JNZ:
-			if (!ZF) return 1;
-			break;
-		case JCC_JBE:
-			if (CF || ZF) return 1;
-			break;
-		case JCC_JA:
-			if (!CF && !ZF) return 1;
-			break;
-		case JCC_JS:
-			if (SF) return 1;
-			break;
-		case JCC_JNS:
-			if (!SF) return 1;
-			break;
-		case JCC_JPE:
-			if (PF) return 1;
-			break;
-		case JCC_JPO:
-			if (!PF) return 1;
-			break;
-		case JCC_JL:
-			if (SF != OF) return 1;
-			break;
-		case JCC_JGE:
-			if (SF == OF) return 1;
-			break;
-		case JCC_JLE:
-			if (ZF || SF != OF) return 1;
-			break;
-		case JCC_JG:
-			if (!ZF && SF == OF) return 1;
-			break;
+static void loopz(I80386* cpu) {
+	/* loop while zero/not zero (E0/E1) b1110000Z */
+	uint8_t imm = 0;
+	uint32_t offset = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
 	}
-	return 0;
+	offset = sign_extend8_32(imm);
+	cpu->cx -= 1;
+	if (cpu->cx && cpu->psw.zf == Z) {
+		if (cpu->address_size) {
+			cpu->eip += offset;
+		}
+		else {
+			cpu->ip += (offset & 0xFFFF);
+		}
+	}
 }
-static void jcc(I80286* cpu) {
-	/* conditional jump(70-7F) b011XCCCC
-	   8086 cpu decode 60-6F the same as 70-7F */
+static void loop(I80386* cpu) {
+	/* loop if CX not zero (E2) b11100010 */
+	uint8_t imm = 0;
+	uint32_t offset = 0;
+	if (!fetch_byte(cpu, &imm)) {
+		return;
+	}
+	offset = sign_extend8_32(imm);
+	cpu->cx -= 1;
+	if (cpu->cx) {
+		if (cpu->address_size) {
+			cpu->eip += offset;
+		}
+		else {
+			cpu->ip += (offset & 0xFFFF);
+		}
+	}
+}
+
+static void jcc_short(I80386* cpu) {
+	/* jmp Jb - (70-7F) b0111CCCC */
 	uint8_t imm = 0;
 	if (!fetch_byte(cpu, &imm)) {
 		return;
 	}
-	if (jump_condition(cpu)) {
-		uint16_t offset = sign_extend8_16(imm);
-		IP += offset;
+	if (i80386_check_condition(cpu)) {
+		uint32_t offset = sign_extend8_32(imm);
+		if (cpu->address_size) {
+			cpu->eip += offset;
+		}
+		else {
+			cpu->ip += (offset & 0xFFFF);
+		}
 	}
 }
-static void jcxz(I80286* cpu) {
-	/* jump if CX zero (E3) b11100011 */
+static void jcc_long(I80386* cpu) {
+	/* jmp Jv - (0F 80-8F) b00001111 b1000CCCC */
+	uint32_t offset = 0;
+	if (cpu->operand_size) {
+		if (!fetch_dword(cpu, &offset)) {
+			return;
+		}
+	}
+	else {
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		offset = sign_extend16_32(imm);
+	}
+
+	if (i80386_check_condition(cpu)) {
+		if (cpu->address_size) {
+			cpu->eip += offset;
+		}
+		else {
+			cpu->ip += (offset & 0xFFFF);
+		}
+	}
+}
+static void jcxz(I80386* cpu) {
+	/* jcxz Jb - (E3) b11100011 */
 	uint8_t imm = 0;
 	if (!fetch_byte(cpu, &imm)) {
 		return;
 	}
-	if (CX == 0) {
-		uint16_t offset = sign_extend8_16(imm);
-		IP += offset;
+	if (cpu->cx == 0) {
+		uint32_t se = sign_extend8_32(imm);
+		if (cpu->address_size) {
+			cpu->eip += se;
+		}
+		else {
+			cpu->ip += (se & 0xFFFF);
+		}
 	}
 }
 
-static void jmp_intra_direct_short(I80286* cpu) {
-	/* Jump short imm8 (EB) b11101011 */
+static void jmp_intra_direct_short(I80386* cpu) {
+	/* jmp Jb - (EB) b11101011 */
 	uint8_t imm = 0;
 	if (!fetch_byte(cpu, &imm)) {
 		return;
 	}
-	uint16_t se = sign_extend8_16(imm);
-	IP += se;
+	uint32_t se = sign_extend8_32(imm);
+	if (cpu->address_size) {
+		cpu->eip += se;
+	}
+	else {
+		cpu->ip += (se & 0xFFFF);
+	}
 }
-static void jmp_intra_direct(I80286* cpu) {
-	/* Jump near  imm16 (E9) b11101001 */
-	uint16_t imm = 0;
-	if (!fetch_word(cpu, &imm)) {
-		return;
+static void jmp_intra_direct(I80386* cpu) {
+	/* jmp Jv - (E9) b11101001 */
+	if (cpu->operand_size) {
+		/* JMP rel32 */
+		uint32_t imm = 0;
+		if (!fetch_dword(cpu, &imm)) {
+			return;
+		}
+		if (cpu->address_size) {
+			cpu->eip += imm;
+		}
+		else {
+			cpu->ip += (imm & 0xFFFF);
+		}
 	}
-	IP += imm;
+	else {
+		/* JMP rel16 */
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		if (cpu->address_size) {
+			cpu->eip += imm;
+		}
+		else {
+			cpu->ip += imm;
+		}
+	}
 }
-static void jmp_inter_direct(I80286* cpu) {
-	/* Jump far addr:seg (EA) b11101010 */
-	uint16_t imm = 0;
-	uint16_t imm2 = 0;
-	if (!fetch_word(cpu, &imm)) {
+static void jmp_intra_indirect(I80386* cpu) {
+	/* jmp Ev - (FF /4) b11111111 */
+	if (cpu->operand_size) {
+		/* FF /4 JMP r/m32 */
+		I80386_OPERAND rm = { 0 };
+		uint32_t offset = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm32(cpu, &rm, &offset)) {
+			return;
+		}
+		cpu->eip = offset;
+	}
+	else {
+		/* FF /4 JMP r/m16 */
+		I80386_OPERAND rm = { 0 };
+		uint16_t offset = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, &rm, &offset)) {
+			return;
+		}
+		cpu->eip = offset;
+	}
+}
+static void jmp_inter_direct(I80386* cpu) {
+	/* jmp Ap - (EA) b11101010 */
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		uint32_t offset = 0;
+		uint16_t selector = 0;
+
+		if (cpu->operand_size) {
+			/* EA cp JMP ptr16:32 */
+			uint32_t imm = 0;
+			if (!fetch_dword(cpu, &imm)) {
+				return;
+			}
+			offset = imm;
+		}
+		else {
+			/* EA cd JMP ptr16:16 */
+			uint16_t imm = 0;
+			if (!fetch_word(cpu, &imm)) {
+				return;
+			}
+			offset = imm;
+		}
+
+		if (!fetch_word(cpu, &selector)) {
+			return;
+		}
+
+		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+			return;
+		}
+		cpu->eip = offset;
+	}
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
+	}
+	else {
+		/* Protected mode */
+		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+		uint32_t offset = 0;
+		uint16_t selector = 0;
+
+		if (cpu->operand_size) {
+			/* EA cp JMP ptr16:32 */
+			uint32_t imm = 0;
+			if (!fetch_dword(cpu, &imm)) {
+				return;
+			}
+			offset = imm;
+		}
+		else {
+			/* EA cd JMP ptr16:16 */
+			uint16_t imm = 0;
+			if (!fetch_word(cpu, &imm)) {
+				return;
+			}
+			offset = imm;
+		}
+
+		if (!fetch_word(cpu, &selector)) {
+			return;
+		}
+
+		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+			i80386_exception_code(cpu, EXCEPTION_GP, selector);
+			return;
+		}
+
+		if (entry.access.s) {
+			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)){
+				return;
+			}
+			cpu->eip = offset;
+		}
+		else {
+
+		}
+	}
+}
+static void jmp_inter_indirect(I80386* cpu) {
+	/* jmp Ep - (FF /5) b11111111 */
+
+	/* The mod R/M byte may refer only to memory */
+	if (cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
-	if (!fetch_word(cpu, &imm2)) {
+
+	if (!modrm_get_effective_address(cpu, NULL)) {
 		return;
 	}
-	IP = imm;
-	CS = imm2;
+
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		uint16_t selector = 0;
+		uint32_t offset = 0;
+
+		if (cpu->operand_size) {
+			/* FF /5 JMP m16:32 */
+			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
+				return;
+			}
+			cpu->effective_address.logical_address.offset += 4;
+		}
+		else {
+			/* FF /5 JMP m16:16 */
+			if (!read_word_ea(cpu, &cpu->effective_address, (uint16_t*)&offset)) {
+				return;
+			}
+			cpu->effective_address.logical_address.offset += 2;
+		}
+
+		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+			return;
+		}
+
+		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+			return;
+		}
+		cpu->eip = offset;
+	}
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
+	}
+	else {
+		/* Protected mode */
+		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+		uint16_t selector = 0;
+		uint32_t offset = 0;
+
+		if (cpu->operand_size) {
+			/* FF /5 JMP m16:32 */
+			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
+				return;
+			}
+			cpu->effective_address.logical_address.offset += 4;
+		}
+		else {
+			/* FF /5 JMP m16:16 */
+			if (!read_word_ea(cpu, &cpu->effective_address, (uint16_t*)&offset)) {
+				return;
+			}
+			cpu->effective_address.logical_address.offset += 2;
+		}
+
+		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+			return;
+		}
+
+		if (entry.access.s) {
+			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+				return;
+			}
+			cpu->eip = offset;
+		}
+		else {
+
+		}
+	}	
 }
 
-static void jmp_intra_indirect(I80286* cpu) {
-	/* Jump near indirect (FF, R/M reg = 100) b11111111 */
-
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
+static void call_intra_direct(I80386* cpu) {
+	/* Call Av - (E8) b11101000 */
+	if (cpu->operand_size) {
+		uint32_t imm = 0;
+		if (!fetch_dword(cpu, &imm)) {
+			return;
+		}
+		if (!push_dword(cpu, cpu->eip)) {
+			return;
+		}
+		cpu->eip += imm;
 	}
-	modrm_read_rm16(cpu, rm, &IP);
-}
-static void jmp_inter_indirect(I80286* cpu) {
-	/* Jump far indirect (FF, R/M reg = 101) b11111111 */
-	uint16_t segment = 0;
-	uint16_t offset = 0;
-
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-
-	segment = modrm_get_segment(cpu);
-	if (!modrm_get_offset(cpu, &offset)) {
-		return;
-	}
-	if (!read_word(cpu, segment, offset, &IP)) {
-		return;
-	}
-	if (!read_word(cpu, segment, offset + 2, &CS)) {
-		return;
+	else {
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		if (!push_word(cpu, cpu->ip)) {
+			return;
+		}
+		cpu->eip = (cpu->eip + imm) & 0xFFFF; /* clear upper 16bits */
 	}
 }
+static void call_intra_indirect(I80386* cpu) {
+	/* call Ev (FF /2) b11111111 */
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
 
-static void call_intra_direct(I80286* cpu) {
-	/* Call disp (E8) b11101000 */
-	uint16_t imm = 0;
-	if (!fetch_word(cpu, &imm)) {
-		return;
+	if (cpu->operand_size) {
+		uint32_t eip = 0;
+		if (!modrm_read_rm32(cpu, &rm, &eip)) {
+			return;
+		}
+		if (!push_dword(cpu, cpu->eip)) {
+			return;
+		}
+		cpu->eip = eip;
 	}
-	push_word(cpu, IP);
-	IP += imm;
+	else {
+		uint16_t ip = 0;
+		if (!modrm_read_rm16(cpu, &rm, &ip)) {
+			return;
+		}
+		if (!push_word(cpu, cpu->ip)) {
+			return;
+		}
+		cpu->eip = ip; /* clear upper 16bits */
+	}
 }
-static void call_inter_direct(I80286* cpu) {
-	/* Call addr:seg (9A) b10011010 */
-	uint16_t imm = 0;
-	uint16_t imm2 = 0;
-	if (!fetch_word(cpu, &imm)) {
+static void call_inter_direct(I80386* cpu) {
+	/* call Ap - (9A) b10011010 */
+
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		uint32_t offset = 0;
+		uint16_t selector = 0;
+
+		if (cpu->operand_size) {
+			if (!fetch_dword(cpu, &offset)) {
+				return;
+			}
+			if (!fetch_word(cpu, &selector)) {
+				return;
+			}
+			if (!push_word(cpu, cpu->cs.selector)) {
+				return;
+			}
+			if (!push_dword(cpu, cpu->eip)) {
+				return;
+			}
+		}
+		else {
+			uint16_t imm = 0;
+			if (!fetch_word(cpu, &imm)) {
+				return;
+			}
+			if (!fetch_word(cpu, &selector)) {
+				return;
+			}
+			if (!push_word(cpu, cpu->cs.selector)) {
+				return;
+			}
+			if (!push_word(cpu, cpu->ip)) {
+				return;
+			}
+			offset = imm; /* clear upper 16bits */
+		}
+
+		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+			return;
+		}
+		cpu->eip = offset;
+	}
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
+	}
+	else {
+		/* Protected mode */
+		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+		uint16_t selector = 0;
+		uint32_t offset = 0;
+
+		if (cpu->operand_size) {
+			if (!fetch_dword(cpu, &offset)) {
+				return;
+			}
+		}
+		else {
+			uint16_t imm = 0;
+			if (!fetch_word(cpu, &imm)) {
+				return;
+			}
+			offset = imm; /* clear upper 16bits */
+		}
+
+		if (!fetch_word(cpu, &selector)) {
+			return;
+		}
+
+		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+			i80386_exception_code(cpu, EXCEPTION_GP, selector);
+			return;
+		}
+
+		if (entry.access.s) {
+			if (!entry.access.e) {
+				i80386_exception_code(cpu, EXCEPTION_GP, selector);
+				return;
+			}
+			if (!push_word(cpu, cpu->cs.selector)) {
+				return;
+			}
+			if (cpu->operand_size) {
+				if (!push_dword(cpu, cpu->eip)) {
+					return;
+				}
+			}
+			else {
+				if (!push_word(cpu, cpu->ip)) {
+					return;
+				}
+			}
+			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+				return;
+			}
+			cpu->eip = offset;
+		}
+		else {
+			switch (entry.access.type) {
+				case I80386_GATE_TYPE_CALL_286:
+				case I80386_GATE_TYPE_CALL_386:
+					if (!i80386_call_gate(cpu, selector, &entry)) {
+						return;
+					}					
+					break;
+				case I80386_GATE_TYPE_TASK:
+					i80386_task_switch(cpu, selector, TASK_SWITCH_CALL);
+					return;
+				default:
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return;
+			}
+		}
+	}	
+}
+static void call_inter_indirect(I80386* cpu) {
+	/* call Ep (FF /3) b11111111 */
+	uint16_t selector = 0;
+	uint32_t offset = 0;
+	uint32_t final_esp = cpu->esp;
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
-	if (!fetch_word(cpu, &imm2)) {
+
+	/* The mod R/M byte may refer only to memory */
+	if (cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
-	push_word(cpu, CS);
-	push_word(cpu, IP);
-	IP = imm;
-	CS = imm2;
+
+	if (!modrm_get_effective_address(cpu, NULL)) {
+		return;
+	}
+
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		if (cpu->operand_size) {
+			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
+				return;
+			}
+			cpu->effective_address.logical_address.offset += 4;
+		}
+		else {
+			uint16_t ip = 0;
+			if (!read_word_ea(cpu, &cpu->effective_address, &ip)) {
+				return;
+			}
+			offset = ip; /* clear upper 16bits */
+			cpu->effective_address.logical_address.offset += 2;
+		}
+
+		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+			return;
+		}
+		if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
+			return;
+		}
+
+		if (cpu->operand_size) {
+			if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
+				return;
+			}
+		}
+		else {
+			if (!push_word_at(cpu, &final_esp, cpu->ip)) {
+				return;
+			}
+		}
+
+		/* commit register values */
+		if (cpu->address_size) {
+			cpu->esp = final_esp;
+		}
+		else {
+			cpu->esp = final_esp & 0xFFFF;
+		}
+		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+			return;
+		}
+		cpu->eip = offset;
+	}
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
+	}
+	else {
+		/* Protected mode */
+		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+
+		if (cpu->operand_size) {
+			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
+				return;
+			}
+			cpu->effective_address.logical_address.offset += 4;
+		}
+		else {
+			uint16_t imm = 0;
+			if (!read_word_ea(cpu, &cpu->effective_address, &imm)) {
+				return;
+			}
+			offset = imm; /* clear upper 16bits */
+			cpu->effective_address.logical_address.offset += 2;
+		}
+
+		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+			return;
+		}
+
+		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+			i80386_exception_code(cpu, EXCEPTION_GP, selector);
+			return;
+		}
+
+		if (entry.access.s) {
+			if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
+				return;
+			}
+			if (cpu->operand_size) {
+				if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
+					return;
+				}
+			}
+			else {
+				if (!push_word_at(cpu, &final_esp, cpu->ip)) {
+					return;
+				}
+			}
+
+			/* commit register values */
+			if (cpu->address_size) {
+				cpu->esp = final_esp;
+			}
+			else {
+				cpu->esp = final_esp & 0xFFFF;
+			}
+			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+				return;
+			}
+			cpu->eip = offset;
+		}
+		else {
+			I80386_GATE gate = { 0 };
+			switch (entry.access.type) {
+				case I80386_GATE_TYPE_CALL_286:
+				case I80386_GATE_TYPE_CALL_386:
+					if (!i80386_call_gate(cpu, selector, &entry)) {
+						return;
+					}
+					break;
+				case I80386_GATE_TYPE_TASK:
+					if (!i80386_task_switch(cpu, selector, TASK_SWITCH_CALL)) {
+						return;
+					}
+					break;
+				default:
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return;
+			}
+
+			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, gate.selector)) {
+				return;
+			}
+
+			if (entry.access.type == I80386_GATE_TYPE_CALL_286) {
+				cpu->eip = gate.offset_lo; /* clear upper 16bits */
+			}
+			else if (entry.access.type == I80386_GATE_TYPE_CALL_386) {
+				cpu->eip = gate.offset_lo | gate.offset_hi << 16;
+			}
+		}
+	}
 }
 
-static void call_intra_indirect(I80286* cpu) {
-	/* Call near R/M (FF, R/M reg = 010) b11111111 */
-	uint16_t ip = 0;
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
-	}
-	if (!modrm_read_rm16(cpu, rm, &ip)) {
-		return;
-	}
-	push_word(cpu, IP);
+static void ret_intra(I80386* cpu) {
+	/* ret/retd <Iw> (C2/C3) b1100001E */
+	uint32_t eip = 0;
+	uint16_t frame = 0;
+	uint32_t final_esp = cpu->esp;
 
-	IP = ip;
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->operand_size) {
+		if (!pop_dword_at(cpu, &final_esp, &eip)) {
+			return;
+		}
+	}
+	else {
+		uint16_t ip = 0;
+		if (!pop_word_at(cpu, &final_esp, &ip)) {
+			return;
+		}
+		eip = ip; /* clear upper 16bits */
+	}
+
+	if (eip > cpu->cs.desc.limit) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	/* if bit 1 is set in opcode then fetch frame word */
+	if (!(cpu->opcode & 0x1)) {
+		if (!fetch_word(cpu, &frame)) {
+			return;
+		}
+	}
+
+	/* commit register values */
+	if (cpu->address_size) {
+		cpu->esp = (final_esp + frame);
+	}
+	else {
+		cpu->esp = (final_esp + frame) & 0xFFFF;
+	}
+	cpu->eip = eip;
 }
-static void call_inter_indirect(I80286* cpu) {
-	/* Call far R/M (FF, R/M reg = 011) b11111111 */
-		
-	uint16_t ip = 0;
+static void ret_inter(I80386* cpu) {
+	/* retf/retfd <Iw> (CA/CB) b1100101E */
+	uint32_t eip = 0;
+	uint32_t final_esp = cpu->esp;
 	uint16_t cs = 0;
-	uint16_t segment = 0;
-	uint16_t offset = 0;
+	uint16_t frame = 0;
 
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
+	}
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		if (cpu->operand_size) {
+			if (!pop_dword_at(cpu, &final_esp, &eip)) {
+				return;
+			}
+			if (!pop_word_align_at(cpu, &final_esp, &cs)) {
+				return;
+			}
+		}
+		else {
+			uint16_t ip = 0;
+			if (!pop_word_at(cpu, &final_esp, &ip)) {
+				return;
+			}
+			eip = ip;
+			if (!pop_word_at(cpu, &final_esp, &cs)) {
+				return;
+			}
+		}
+	}
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
+		
+	}
+	else {
+		/* Protected mode */
+		uint16_t stack_word = 0;
+		uint8_t rpl = 0;
+
+		if (cpu->operand_size) {
+			/* Third word on stack must be within stack limits */
+			stack_peek_word(cpu, 2, &stack_word);
+			if (stack_word > cpu->ss.desc.limit) {
+				i80386_exception(cpu, EXCEPTION_SS);
+				return;
+			}
+		}
+		else {
+			/* Second word on stack must be within stack limits */
+			stack_peek_word(cpu, 1, &stack_word);
+			if (stack_word > cpu->ss.desc.limit) {
+				i80386_exception(cpu, EXCEPTION_SS);
+				return;
+			}
+		}
+
+		/* Return selector RPL must be >= CPL */
+		if (rpl < cpu->cpl) {
+			i80386_exception(cpu, EXCEPTION_GP);
+			return;
+		}
 	}
 
-	segment = modrm_get_segment(cpu);
-	if (!modrm_get_offset(cpu, &offset)) {
+	if (eip > cpu->cs.desc.limit) {
+		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
-	if (!read_word(cpu, segment, offset, &ip)) {
-		return;
-	}
-	if (!read_word(cpu, segment, offset + 2, &cs)) {
-		return;
+	if (!(cpu->opcode & 0x1)) {
+		if (!fetch_word(cpu, &frame)) {
+			return;
+		}
 	}
 
-	push_word(cpu, CS);
-	push_word(cpu, IP);
+	/* commit final register values */
+	if (cpu->address_size) {
+		cpu->esp = (final_esp + frame);
+	}
+	else {
+		cpu->esp = (final_esp + frame) & 0xFFFF;
+	}
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, cs)) {
+		return;
+	}
+	cpu->eip = eip;
+}
+
+static void mov_rm_imm(I80386* cpu) {
+	/* mov Eb,Ib / Ev,Iv - (C6/C7) b1100011W */
 	
-	IP = ip;
-	CS = cs;
-}
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
 
-static void ret_intra_add_imm(I80286* cpu) {
-	/* retn imm16 (C2) b11000010 */
-	uint16_t imm = 0;
-	if (!fetch_word(cpu, &imm)) {
-		return;
-	}
-	if (!pop_word(cpu, &IP)) {
-		return;
-	}
-	SP += imm;
-}
-static void ret_intra(I80286* cpu) {
-	/* retn (C3) b11000011 */
-	if (!pop_word(cpu, &IP)) {
-		return;
-	}
-}
-static void ret_inter_add_imm(I80286* cpu) {
-	/* retf imm16 (CA) b11001010 */
-
-	uint16_t imm = 0;
-	if (!fetch_word(cpu, &imm)) {
-		return;
-	}
-	if (!pop_word(cpu, &IP)) {
-		return;
-	}
-	if (!pop_word(cpu, &CS)) {
-		return;
-	}
-	SP += imm;
-}
-static void ret_inter(I80286* cpu) {
-	/* retf (CB) b11001011 */
-	if (!pop_word(cpu, &IP)) {
-		return;
-	}
-	if (!pop_word(cpu, &CS)) {
-		return;
-	}
-}
-
-static void mov_rm_imm(I80286* cpu) {
-	/* mov r/m, imm (C6/C7) b1100011W */
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
-	if (cpu->modrm.u.bits.reg != 0) {
-		i80286_exception(cpu, EXCEPTION_UD);
+	if (cpu->modrm.reg != 0) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
+
 	if (W) {
-		OPERAND16 rm = { 0 };
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
+		/* Ev,Iv */
+		if (cpu->operand_size) {
+			I80386_OPERAND rm = { 0 };
+			uint32_t imm = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
+				return;
+			}
+			if (!fetch_dword(cpu, &imm)) {
+				return;
+			}
+			modrm_write_rm32(cpu, &rm, imm);
 		}
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
+		else {
+			I80386_OPERAND rm = { 0 };
+			uint16_t imm = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
+				return;
+			}
+			if (!fetch_word(cpu, &imm)) {
+				return;
+			}
+			modrm_write_rm16(cpu, &rm, imm);
 		}
-		modrm_write_rm16(cpu, rm, imm);
 	}
 	else {
-		OPERAND8 rm = { 0 };
-		if (!modrm_get_rm8(cpu, &rm)) {
+		/* Eb,Ib */
+		I80386_OPERAND rm = { 0 };
+		uint8_t imm = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
-		uint8_t imm = 0;
 		if (!fetch_byte(cpu, &imm)) {
 			return;
 		}
-		modrm_write_rm8(cpu, rm, imm);
+		modrm_write_rm8(cpu, &rm, imm);
 	}
 }
-static void mov_reg_imm(I80286* cpu) {
-	/* mov r/m, reg (B0-BF) b1011WREG */
+static void mov_reg_imm(I80386* cpu) {
+	/* mov Gb,Ib / Gv,Iv - (B0-BF) b1011WREG */
 	if (WREG) {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
+		/* Gv,Iv */
+		if (cpu->operand_size) {
+			uint32_t imm = 0;
+			if (!fetch_dword(cpu, &imm)) {
+				return;
+			}
+			reg32_write(cpu, cpu->opcode, imm);
 		}
-		reg16_write(cpu, cpu->opcode, imm);
+		else {
+			uint16_t imm = 0;
+			if (!fetch_word(cpu, &imm)) {
+				return;
+			}
+			reg16_write(cpu, cpu->opcode, imm);
+		}
 	}
 	else {
+		/* Gb,Ib */
 		uint8_t imm = 0;
 		if (!fetch_byte(cpu, &imm)) {
 			return;
@@ -2424,1402 +4279,2615 @@ static void mov_reg_imm(I80286* cpu) {
 		reg8_write(cpu, cpu->opcode, imm);
 	}
 }
-static void mov_rm_reg(I80286* cpu) {
-	/* mov r/m, reg (88/89/8A/8B) b100010DW */
+static void mov_rm_reg(I80386* cpu) {
+	/* mov Eb<->Gb / Ev<->Gv (88/89/8A/8B) b100010DW */
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
 	if (W) {
-		OPERAND16 rm = { 0 };
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (D) {
-			uint16_t tmp = 0;
-			if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		if (cpu->operand_size) {
+			I80386_OPERAND rm = { 0 };
+			uint32_t tmp = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
 				return;
 			}
-			modrm_write_reg16(cpu, tmp);
+			if (D) {
+				if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+					return;
+				}
+				modrm_write_reg32(cpu, tmp);
+			}
+			else {
+				tmp = modrm_read_reg32(cpu);
+				modrm_write_rm32(cpu, &rm, tmp);
+			}
 		}
 		else {
-			uint16_t tmp = modrm_read_reg16(cpu);
-			modrm_write_rm16(cpu, rm, tmp);
+			I80386_OPERAND rm = { 0 };
+			uint16_t tmp = 0;
+			if (!modrm_get_rm(cpu, &rm)) {
+				return;
+			}
+			if (D) {
+				if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+					return;
+				}
+				modrm_write_reg16(cpu, tmp);
+			}
+			else {
+				tmp = modrm_read_reg16(cpu);
+				modrm_write_rm16(cpu, &rm, tmp);
+			}
 		}
 	}
 	else {
-		OPERAND8 rm = { 0 };
-		if (!modrm_get_rm8(cpu, &rm)) {
+		I80386_OPERAND rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
 		if (D) {
-			uint8_t tmp = 0;
-			if (!modrm_read_rm8(cpu, rm, &tmp)) {
+			if (!modrm_read_rm8(cpu, &rm, &tmp)) {
 				return;
 			}
 			modrm_write_reg8(cpu, tmp);
 		}
 		else {
-			uint8_t tmp = modrm_read_reg8(cpu);
-			modrm_write_rm8(cpu, rm, tmp);
+			tmp = modrm_read_reg8(cpu);
+			modrm_write_rm8(cpu, &rm, tmp);
 		}
 	}
 }
-static void mov_accum_mem(I80286* cpu) {
-	/* mov AL/AX, [mem] (A0/A1/A2/A3) b101000DW */
-	uint16_t addr = 0;
-	if (!fetch_word(cpu, &addr)) {
-		return;
+static void mov_accum_mem(I80386* cpu) {
+	/* MOV AL/AX/EAX, Ob/Ov (A0/A1/A2/A3) b101000DW */
+	uint32_t addr = 0;
+	if (cpu->address_size) {
+		if (!fetch_dword(cpu, &addr)) {
+			return;
+		}
 	}
+	else {
+		if (!fetch_word(cpu, (uint16_t*)&addr)) {
+			return;
+		}
+	}
+
 	if (W) {
-		if (D) {
-			write_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, AX);
+		if (cpu->operand_size) {
+			if (D) {
+				write_dword_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), addr, cpu->eax);
+			}
+			else {
+				read_dword_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), addr, &cpu->eax);
+			}
 		}
 		else {
-			read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, &AX);
+			if (D) {
+				write_word_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), addr, cpu->ax);
+			}
+			else {
+				read_word_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), addr, &cpu->ax);
+			}
 		}
 	}
 	else {
 		if (D) {
-			write_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, AL);
+			write_byte_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), addr, cpu->al);
 		}
 		else {
-			read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), addr, &AL);
+			read_byte_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), addr, &cpu->al);
 		}
 	}
 }
-static void mov_seg(I80286* cpu) {
-	/* mov r/m, seg (8C/8E) b100011D0 */
+static void mov_seg(I80386* cpu) {
+	/* mov Ew<->SW (8C/8E) b100011D0 */
+	I80386_OPERAND rm = { 0 };
+	uint8_t sreg = 0;
+
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
+	if (!modrm_get_rm(cpu, &rm)) {
 		return;
 	}
-
-	uint8_t sreg = 0;
-	if (!modrm_get_seg_index(cpu, &sreg)) {
+	if (!modrm_get_seg_index(cpu, cpu->modrm, &sreg)) {
 		return;
 	}
 
 	if (D) {
+		uint16_t selector = 0;
 		if (sreg == SEG_CS) {
 			/* illegal - mov cs, r/m */
-			i80286_exception(cpu, EXCEPTION_UD); 
+			i80386_exception(cpu, EXCEPTION_UD);
 			return;
 		}
-		modrm_read_rm16(cpu, rm, &cpu->segments[sreg].selector);
+		if (sreg == SEG_SS) {
+			cpu->int_delay = 1;
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &selector)) {
+			return;
+		}
+
+		i80386_load_segment_register(cpu, &cpu->segment_registers[sreg], sreg, selector);
 	}
 	else {
-		modrm_write_rm16(cpu, rm, cpu->segments[sreg].selector);
-	}
-	
-	if (D) {
-		/* Interrupts Following 'MOV SS, XXX' May Corrupt Memory. On early Intel 8088 processors
-			(marked "INTEL '78" or "(C) 1978"), if an interrupt occurs immediately after a 
-			'MOV SS, XXX' instruction, data may be pushed using an incorrect stack address,
-			resulting in memory corruption. */
-		cpu->int_delay = 1;
+		modrm_write_rm16(cpu, &rm, cpu->segment_registers[sreg].selector);
 	}
 }
+static void mov_cr(I80386* cpu) {
+	/* mov Cd,Rd /r - (0F 20/22) 0b00001111 b001000D0 */
+	if (!fetch_modrm(cpu)){
+		return;
+	}
 
-static void lea(I80286* cpu) {
-	/* lea reg16, [r/m] (8D) b10001101 */
+	/* Only 0,2,3 are valid on 386 */
+	if (cpu->modrm.reg == 1 || cpu->modrm.reg > 3) { 
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	/* The mod R/M byte may refer only to a register */
+	if (cpu->modrm.mod != 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	/* Must be ring 0 */
+	if (cpu->cpl != 0) { 
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	if (D) {
+		/* reloading CR3 flushes the TLB */
+		if (cpu->modrm.reg == 3) {
+			i80386_flush_tlb(cpu);
+		}
+		/* changing PG bit in CR0 flushes the TLB */
+		if (cpu->modrm.reg == 0 && (cpu->control_registers[cpu->modrm.reg] ^ cpu->general_registers[cpu->modrm.rm].r32) & 0x80000000) {
+			i80386_flush_tlb(cpu);
+		}
+		cpu->control_registers[cpu->modrm.reg] = cpu->general_registers[cpu->modrm.rm].r32;
+	}
+	else {
+		cpu->general_registers[cpu->modrm.rm].r32 = cpu->control_registers[cpu->modrm.reg];
+	}
+}
+static void mov_dr(I80386* cpu) {
+	/* mov Dd,Rd /r (0F 21/23) 0b00001111 b001000D1 */
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	
+	/* Only 0,1,2,3,6,7 are valid on 386 */
+	if (cpu->modrm.reg == 4 || cpu->modrm.reg == 5) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	/* The mod R/M byte may refer only to a register */
+	if (cpu->modrm.mod != 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	/* Must be ring 0 */
+	if (cpu->cpl != 0) { 
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	if (D) {
+		cpu->debug_registers[cpu->modrm.reg] = cpu->general_registers[cpu->modrm.rm].r32;
+	}
+	else {
+		cpu->general_registers[cpu->modrm.rm].r32 = cpu->debug_registers[cpu->modrm.reg];
+	}
+}
+static void mov_tr(I80386* cpu) {
+	/* mov Td,Rd /r (0F 24/26) 0b00001111 b001001D0 */
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	
+	/* Only 6,7 are valid on 386 */
+	if (cpu->modrm.reg < 6) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+	
+	/* The mod R/M byte may refer only to a register */
+	if (cpu->modrm.mod != 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	/* Must be ring 0 */
+	if (cpu->cpl != 0) { 
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	if (D) {
+		cpu->test_registers[cpu->modrm.reg] = cpu->general_registers[cpu->modrm.rm].r32;
+	}
+	else {
+		cpu->general_registers[cpu->modrm.rm].r32 = cpu->test_registers[cpu->modrm.reg];
+	}
+}
+static void movzx(I80386* cpu) {
+	/* Move with zero-extend - (0F B6/B7 /r) b */
+	
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (W) {
+		I80386_OPERAND rm = { 0 };
+		uint16_t val = 0;
+
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, &rm, &val)) {
+			return;
+		}
+
+		if (cpu->operand_size) {
+			/* r32, r/m16 */
+			modrm_write_reg32(cpu, val);
+		}
+		else {
+			/* r16, r/m16 */
+			modrm_write_reg16(cpu, val);
+		}
+	}
+	else {
+		I80386_OPERAND rm = { 0 };
+		uint8_t val = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, &rm, &val)) {
+			return;
+		}
+
+		if (cpu->operand_size) {
+			/* r32, r/m8 */
+			modrm_write_reg32(cpu, val);
+		}
+		else {
+			/* r16, r/m8 */
+			modrm_write_reg16(cpu, val);
+		}		
+	}
+}
+static void movsx(I80386* cpu) {
+	/* Move with sign-extend - (0F BE/BF /r) b */
+
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
 
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
 
-	uint16_t offset = 0;
-	if (!modrm_get_offset(cpu, &offset)) {
-		return;
+	if (W) {
+		I80386_OPERAND rm = { 0 };
+		uint16_t val = 0;
+
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm16(cpu, &rm, &val)) {
+			return;
+		}
+
+		if (cpu->operand_size) {
+			/* r32, r/m16 */
+			uint32_t se = 0;
+			se = sign_extend16_32(val);
+			modrm_write_reg32(cpu, se);
+		}
+		else {
+			/* r16, r/m16 */
+			modrm_write_reg16(cpu, val);
+		}
 	}
-	modrm_write_reg16(cpu, offset);
+	else {
+		I80386_OPERAND rm = { 0 };
+		uint8_t val = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if (!modrm_read_rm8(cpu, &rm, &val)) {
+			return;
+		}
+
+		if (cpu->operand_size) {
+			/* r32, r/m8 */
+			uint32_t se = 0;
+			se = sign_extend8_32(val);
+			modrm_write_reg32(cpu, se);
+		}
+		else {
+			/* r16, r/m8 */
+			uint16_t se = 0;
+			se = sign_extend8_16(val);
+			modrm_write_reg16(cpu, se);
+		}
+	}
 }
 
-static void not(I80286* cpu) {
+static void lea(I80386* cpu) {
+	/* Gv,M (8D) b10001101 */
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+
+	/* M - The mod R/M byte may refer only to memory */
+	if (cpu->modrm.mod == 0b11) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!modrm_get_effective_address(cpu, NULL)) {
+		return;
+	}
+
+	if (cpu->operand_size) {
+		modrm_write_reg32(cpu, cpu->effective_address.logical_address.offset);
+	}
+	else {
+		modrm_write_reg16(cpu, cpu->effective_address.logical_address.offset & 0xFFFF);
+	}
+}
+
+static void not(I80386* cpu) {
 	/* not reg (F6/F7, R/M reg = b010) b1111011W */
 	if (W) {
-		OPERAND16 rm = { 0 };
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
+		I80386_OPERAND rm = { 0 };
 		uint16_t tmp = 0;
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
-		i80286_alu_not16(cpu, &tmp);
-		modrm_write_rm16(cpu, rm, tmp);
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+			return;
+		}
+		i80386_alu_not16(cpu, &tmp);
+		modrm_write_rm16(cpu, &rm, tmp);
 	}
 	else {
-		OPERAND8 rm = { 0 };
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
+		I80386_OPERAND rm = { 0 };
 		uint8_t tmp = 0;
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
+		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
-		i80286_alu_not8(cpu, &tmp);
-		modrm_write_rm8(cpu, rm, tmp);
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return;
+		}
+		i80386_alu_not8(cpu, &tmp);
+		modrm_write_rm8(cpu, &rm, tmp);
 	}
 }
-static void neg(I80286* cpu) {
-	/* neg reg (F6/F7, R/M reg = b011) b1111011W */
+static void neg(I80386* cpu) {
+	/* neg reg (F6/F7, R/M reg = b011) b1111011W */	
+	if (W) {
+		I80386_OPERAND rm = { 0 };
+		uint16_t tmp = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if(!modrm_read_rm16(cpu, &rm, &tmp)) {
+			return;
+		}
+		i80386_alu_neg16(cpu, &tmp);
+		modrm_write_rm16(cpu, &rm, tmp);
+	}
+	else {
+		I80386_OPERAND rm = { 0 };
+		uint8_t tmp = 0;
+		if (!modrm_get_rm(cpu, &rm)) {
+			return;
+		}
+		if(!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return;
+		}
+		i80386_alu_neg8(cpu, &tmp);
+		modrm_write_rm8(cpu, &rm, tmp);
+	}
+}
+
+static void mul_accum_rm(I80386* cpu) {
+	/* mul eAX,Ev - (F6/F7, R/M reg = b100) b1111011W */
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (W) {
+		if (cpu->operand_size) {
+			uint32_t tmp = 0;
+			uint64_t product = 0;
+			if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_mul32(cpu, cpu->eax, tmp, &product);
+			cpu->edx = product >> 32;
+			cpu->eax = product & 0xFFFFFFFF;
+		}
+		else {
+			uint16_t tmp = 0;
+			uint32_t product = 0;			
+			if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_mul16(cpu, cpu->ax, tmp, &product);
+			cpu->dx = product >> 16;
+			cpu->ax = product & 0xFFFF;
+		}
+	}
+	else {
+		uint8_t tmp = 0;
+		uint16_t product = 0;
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return;
+		}
+		i80386_alu_mul8(cpu, cpu->al, tmp, &product);
+		cpu->ax = product;
+	}
+}
+static void imul_accum_rm(I80386* cpu) {
+	/* imul eAX,Ev - (F6/F7, R/M reg = b101) b1111011W */
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (W) {
+		if (cpu->operand_size) {
+			uint32_t tmp = 0;
+			uint64_t product = 0;
+			if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_imul32(cpu, cpu->eax, tmp, &product);
+			cpu->edx = (product >> 32) & 0xFFFFFFFF;
+			cpu->eax = product & 0xFFFFFFFF;
+		}
+		else {
+			uint16_t tmp = 0;
+			uint32_t product = 0;
+			if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_imul16(cpu, cpu->ax, tmp, &product);
+			cpu->dx = (product >> 16) & 0xFFFF;
+			cpu->ax = product & 0xFFFF;
+		}
+	}
+	else {
+		uint8_t tmp = 0;
+		uint16_t product = 0;
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return;
+		}
+		i80386_alu_imul8(cpu, cpu->al, tmp, &product);
+		cpu->ax = product;
+	}
+}
+static void imul_reg_rm_imm(I80386* cpu) {
+	/* imul Gv,Ev,Iv - (69/6B) b011010S1 */
+	I80386_OPERAND rm = { 0 };
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t multiplicand = 0;
+		uint32_t multiplier = 0;
+		uint64_t product = 0;
+		if (S) {
+			uint8_t imm = 0;
+			if (!fetch_byte(cpu, &imm)) {
+				return;
+			}
+			multiplier = sign_extend8_32(imm);
+		}
+		else {
+			if (!fetch_dword(cpu, &multiplier)) {
+				return;
+			}
+		}
+		if (!modrm_read_rm32(cpu, &rm, &multiplicand)) {
+			return;
+		}
+		i80386_alu_imul32(cpu, multiplicand, multiplier, &product);
+		modrm_write_reg32(cpu, product & 0xFFFFFFFF);
+	}
+	else {
+		uint16_t multiplicand = 0;
+		uint16_t multiplier = 0;
+		uint32_t product = 0;
+		if (S) {
+			uint8_t imm = 0;
+			if (!fetch_byte(cpu, &imm)) {
+				return;
+			}
+			multiplier = sign_extend8_16(imm);
+		}
+		else {
+			if (!fetch_word(cpu, &multiplier)) {
+				return;
+			}
+		}
+		if (!modrm_read_rm16(cpu, &rm, &multiplicand)) {
+			return;
+		}
+		i80386_alu_imul16(cpu, multiplicand, multiplier, &product);
+		modrm_write_reg16(cpu, product & 0xFFFF);
+	}
+}
+static void imul_reg_rm(I80386* cpu) {
+	/* imul Gv,Ev - (0F AF) b00001111 b10101111 */
+	I80386_OPERAND rm = { 0 };
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t multiplicand = 0;
+		uint32_t multiplier = 0;
+		uint64_t product = 0;
+		multiplicand = modrm_read_reg32(cpu);
+		if (!modrm_read_rm32(cpu, &rm, &multiplier)) {
+			return;
+		}
+		i80386_alu_imul32(cpu, multiplicand, multiplier, &product);
+		modrm_write_reg32(cpu, product & 0xFFFFFFFF);
+	}
+	else {
+		uint16_t multiplicand = 0;
+		uint16_t multiplier = 0;
+		uint32_t product = 0;
+		multiplicand = modrm_read_reg16(cpu);
+		if (!modrm_read_rm16(cpu, &rm, &multiplier)) {
+			return;
+		}
+		i80386_alu_imul16(cpu, multiplicand, multiplier, &product);
+		modrm_write_reg16(cpu, product & 0xFFFF);
+	}
+}
+
+static void div_accum_rm(I80386* cpu) {
+	/* div eAX,Ev - (F6/F7, R/M reg = b110) b1111011W */
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (W) {
+		uint16_t tmp = 0;
+		uint32_t dividend = 0;
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+			return;
+		}
+		dividend = cpu->dx << 16 | cpu->ax;
+		i80386_alu_div16(cpu, dividend, tmp, &cpu->ax, &cpu->dx);
+	}
+	else {
+		uint8_t tmp = 0;
+		uint16_t dividend = 0;
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return;
+		}
+		dividend = cpu->ax;
+		i80386_alu_div8(cpu, dividend, tmp, &cpu->al, &cpu->ah);
+	}
+}
+static void idiv_accum_rm(I80386* cpu) {
+	/* idiv eAX,Ev (F6/F7, R/M reg = b111) b1111011W */
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (W) {
+		uint16_t tmp = 0;
+		uint32_t dividend = 0;
+		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+			return;
+		}
+		dividend = cpu->dx << 16 | cpu->ax;
+		i80386_alu_idiv16(cpu, dividend, tmp, &cpu->ax, &cpu->dx);
+	}
+	else {
+		uint8_t tmp = 0;
+		uint16_t dividend = 0;
+		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
+			return;
+		}
+		dividend = cpu->ax;
+		i80386_alu_idiv8(cpu, dividend, tmp, &cpu->al, &cpu->ah);
+	}
+}
+
+static void movs(I80386* cpu) {
+	/* movs [ES:eDI], [DS:eSI] (A4/A5) b1010010W */
+	uint32_t dest = 0;
+	uint32_t src = 0;
+	uint32_t counter = 0;
+	uint32_t adjustment = 0;
+
+	if (cpu->address_size) {
+		dest = cpu->edi;
+		src = cpu->esi;
+		counter = cpu->ecx;
+	}
+	else {
+		dest = cpu->di;
+		src = cpu->si;
+		counter = cpu->cx;
+	}
+
+	/* calculate adjustment len */
+	adjustment = W ? cpu->operand_size ? 4 : 2 : 1;
+	if (cpu->psw.df) {
+		adjustment = 0U - adjustment;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	/* Rep prefix check */
+	if (F1) {
+		if (counter == 0) {
+			return;
+		}
+		counter -= 1;
+	}
+
+	/* Do string operation */
+	if (W) {
+		if (cpu->operand_size) {
+			uint32_t val = 0;
+			if (!read_dword_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val)) {
+				return;
+			}
+			if (!write_dword_sreg(cpu, SEG_ES, dest, val)) {
+				return;
+			}
+		}
+		else {
+			uint16_t val = 0;
+			if (!read_word_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val)) {
+				return;
+			}
+			if (!write_word_sreg(cpu, SEG_ES, dest, val)) {
+				return;
+			}
+		}
+	}
+	else {
+		uint8_t val = 0;
+		if (!read_byte_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val)) {
+			return;
+		}
+		if (!write_byte_sreg(cpu, SEG_ES, dest, val)) {
+			return;				
+		}
+	}
+
+	dest += adjustment;
+	src += adjustment;
+
+	if (cpu->address_size) {
+		cpu->edi = dest;
+		cpu->esi = src;
+		cpu->ecx = counter;
+	}
+	else {
+		cpu->di = dest & 0xFFFF;
+		cpu->si = src & 0xFFFF;
+		cpu->cx = counter & 0xFFFF;
+	}
+
+	/* Rep prefix check */
+	if (F1) {
+		i80386_rollback_instruction(cpu); /* Allow interrupts */
+	}
+}
+static void stos(I80386* cpu) {
+	/* stos [ES:eDI], eAX - (AA/AB) b1010101W */
+	uint32_t dest = 0;
+	uint32_t counter = 0;
+	uint32_t adjustment = 0;
+
+	if (cpu->address_size) {
+		dest = cpu->edi;
+		counter = cpu->ecx;
+	}
+	else {
+		dest = cpu->di;
+		counter = cpu->cx;
+	}
+
+	/* calculate adjustment len */
+	adjustment = W ? cpu->operand_size ? 4 : 2 : 1;
+	if (cpu->psw.df) {
+		adjustment = 0U - adjustment;
+	}
+
+	/* Rep prefix check */
+	if (F1) {
+		if (counter == 0) {
+			return;
+		}
+		counter -= 1;
+	}
+
+	/* Do string operation */
+	if (W) {
+		if (cpu->operand_size) {
+			if (!write_dword_sreg(cpu, SEG_ES, dest, cpu->eax)) {
+				return;
+			}
+		}
+		else {
+			if (!write_word_sreg(cpu, SEG_ES, dest, cpu->ax)) {
+				return;
+			}
+		}
+	}
+	else {
+		if (!write_byte_sreg(cpu, SEG_ES, dest, cpu->al)) {
+			return;
+		}
+	}
 	
-	/* If the operand is zero, its sign is not changed.
-	 Attempting to negate a byte containing -128 or 
-	 a word containing -32,768 causes no change to 
-	 the operand and sets OF. NEG updates AF, CF, OF,
-	 PF, SF and ZF. CF is always set except when the
-	 operand is zero, in which case it is cleared */
+	/* Adjust si/di delta */
+	dest += adjustment;
 
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if(!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_neg16(cpu, &tmp);
-		modrm_write_rm16(cpu, rm, tmp);
+	if (cpu->address_size) {
+		cpu->edi = dest;
+		cpu->ecx = counter;
 	}
 	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if(!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_neg8(cpu, &tmp);
-		modrm_write_rm8(cpu, rm, tmp);
+		cpu->di = dest & 0xFFFF;
+		cpu->cx = counter & 0xFFFF;
 	}
-}
-
-static void mul_rm(I80286* cpu) {
-	/* mul r/m (F6/F7, R/M reg = b100) b1111011W */
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		uint32_t product = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_mul16(cpu, AX, tmp, &product);
-		DX = product >> 16;
-		AX = product & 0xFFFF;
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		uint16_t product = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_mul8(cpu, AL, tmp, &product);
-		AX = product;
-	}
-}
-static void imul_rm(I80286* cpu) {
-	/* imul r/m (F6/F7, R/M reg = b101) b1111011W */
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		uint32_t product = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_imul16(cpu, AX, tmp, &product);
-		DX = product >> 16;
-		AX = product & 0xFFFF;
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		uint16_t product = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		i80286_alu_imul8(cpu, AL, tmp, &product);
-		AX = product;
-	}
-}
-static void imul_rm_imm(I80286* cpu) {
-	/* imul reg,r/m,imm (69/6B, R/M reg = b101) b011010S1 */
-
-	OPERAND16 rm = { 0 };
-	uint16_t multiplicand = 0;
-	uint32_t product = 0;
-	uint16_t imm = 0;
-
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
-	}
-	if (S) {
-		uint8_t imm2 = 0;
-		if (!fetch_byte(cpu, &imm2)) {
-			return;
-		}
-
-		imm = sign_extend8_16(imm2);
-	}
-	else {
-		if (!fetch_word(cpu, &imm)) {
-			return;
-		}
-	}
-
-	if (!modrm_read_rm16(cpu, rm, &multiplicand)) {
-		return;
-	}
-	i80286_alu_imul16(cpu, multiplicand, imm, &product);
-	modrm_write_reg16(cpu, product & 0xFFFF);
-}
-static void div_rm(I80286* cpu) {
-	/* div r/m (F6/F7, R/M reg = b110) b1111011W */
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		uint32_t dividend = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		dividend = DX << 16 | AX;
-		i80286_alu_div16(cpu, dividend, tmp, &AX, &DX);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		uint16_t dividend = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		dividend = AX;
-		i80286_alu_div8(cpu, dividend, tmp, &AL, &AH);
-	}
-}
-static void idiv_rm(I80286* cpu) {
-	/* idiv r/m (F6/F7, R/M reg = b111) b1111011W */
-	if (W) {
-		OPERAND16 rm = { 0 };
-		uint16_t tmp = 0;
-		uint32_t dividend = 0;
-		if (!modrm_get_rm16(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm16(cpu, rm, &tmp)) {
-			return;
-		}
-		dividend = DX << 16 | AX;
-		i80286_alu_idiv16(cpu, dividend, tmp, &AX, &DX);
-	}
-	else {
-		OPERAND8 rm = { 0 };
-		uint8_t tmp = 0;
-		uint16_t dividend = 0;
-		if (!modrm_get_rm8(cpu, &rm)) {
-			return;
-		}
-		if (!modrm_read_rm8(cpu, rm, &tmp)) {
-			return;
-		}
-		dividend = AX;
-		i80286_alu_idiv8(cpu, AX, tmp, &AL, &AH);
-	}
-}
-
-static void movs(I80286* cpu) {
-	/* movs (A4/A5) b1010010W */
 
 	/* Rep prefix check */
 	if (F1) {
-		if (CX == 0) {
-			return;
-		}
-		CX -= 1;
+		i80386_rollback_instruction(cpu); /* Allow interrupts */
 	}
+}
+static void lods(I80386* cpu) {
+	/* lods eAX, [DS:eSI] - (AC/AD) b1010110W */
+	uint32_t src = 0;
+	uint32_t counter = 0;
+	uint32_t adjustment = 0;
 
-	uint16_t adjustment = 0;
-	if (DF) {
-		adjustment = 0xFFFF;
+	if (cpu->address_size) {
+		src = cpu->esi;
+		counter = cpu->ecx;
 	}
 	else {
-		adjustment = 1;
+		src = cpu->si;
+		counter = cpu->cx;
+	}
+
+	/* calculate adjustment len */
+	adjustment = W ? cpu->operand_size ? 4 : 2 : 1;
+	if (cpu->psw.df) {
+		adjustment = 0U - adjustment;
+	}
+
+	/* Rep prefix check */
+	if (F1) {
+		if (counter == 0) {
+			return;
+		}
+		counter -= 1;
 	}
 
 	/* Do string operation */
 	if (W) {
-		uint16_t src = 0;
-		if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
-			if (write_word(cpu, ES, DI, src)) {
-				/* Rep prefix check */
-				if (F1) {
-					IP -= cpu->instruction_len; /* Allow interrupts */
-				}
+		if (cpu->operand_size) {
+			if (!read_dword_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &cpu->eax)) {
+				return;
 			}
-			else {
-				if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
-			}
-			DI += adjustment;
-			DI += adjustment;
 		}
-		SI += adjustment;
-		SI += adjustment;
+		else {
+			if (!read_word_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &cpu->ax)) {
+				return;
+			}
+		}
 	}
 	else {
-		uint8_t src = 0;
-		if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
-			if (write_byte(cpu, ES, DI, src)) {
-				/* Rep prefix check */
-				if (F1) {
-					IP -= cpu->instruction_len; /* Allow interrupts */
-				}
-			}
-			else {
-				if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
-			}
-			DI += adjustment;
-		}
-		SI += adjustment;
-	}
-}
-static void stos(I80286* cpu) {
-	/* stos (AA/AB) b1010101W */
-
-	/* Rep prefix check */
-	if (F1) {
-		if (CX == 0) {
+		if (!read_byte_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &cpu->al)) {
 			return;
-		}
-		CX -= 1;
-	}
-
-	/* Do string operation */
-	if (W) {
-		if (write_word(cpu, ES, DI, AX)) {
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-		}
-		else {
-			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
-		}
-	}
-	else {
-		if (write_byte(cpu, ES, DI, AL)) {
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-		}
-		else {
-			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
 		}
 	}
 
 	/* Adjust si/di delta */
-	if (DF) {
-		DI -= (1 << W);
+	src += adjustment;
+
+	if (cpu->address_size) {
+		cpu->esi = src;
+		cpu->ecx = counter;
 	}
 	else {
-		DI += (1 << W);
+		cpu->si = src & 0xFFFF;
+		cpu->cx = counter & 0xFFFF;
 	}
-}
-static void lods(I80286* cpu) {
-	/* lods (AC/AD) b1010110W */
 
 	/* Rep prefix check */
 	if (F1) {
-		if (CX == 0) {
+		i80386_rollback_instruction(cpu); /* allow interrupts */
+	}
+}
+static void cmps(I80386* cpu) {
+	/* cmps [ES:eDI], [DS:eSI] - (A6/A7) b1010011W */
+	uint32_t src = 0;
+	uint32_t dest = 0;
+	uint32_t counter = 0;
+	uint32_t adjustment = 0;
+
+	if (cpu->address_size) {
+		src = cpu->esi;
+		dest = cpu->edi;
+		counter = cpu->ecx;
+	}
+	else {
+		src = cpu->si;
+		dest = cpu->di;
+		counter = cpu->cx;
+	}
+
+	/* calculate adjustment len */
+	adjustment = W ? cpu->operand_size ? 4 : 2 : 1;
+	if (cpu->psw.df) {
+		adjustment = 0U - adjustment;
+	}
+
+	/* Rep prefix check */
+	if (F1) {
+		if (counter == 0) {
 			return;
 		}
-		CX -= 1;
+		counter -= 1;
 	}
 
 	/* Do string operation */
 	if (W) {
-		if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &AX)){
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
+		if (cpu->operand_size) {
+			uint32_t val1 = 0;
+			uint32_t val2 = 0;
+			if (!read_dword_sreg(cpu, SEG_ES, dest, &val2)) {
+				return;
+			}
+			if (!read_dword_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val1)) {
+				return;
+			}
+			i80386_alu_cmp32(cpu, &val1, val2);
+		}
+		else {
+			uint16_t val1 = 0;
+			uint16_t val2 = 0;
+			if (!read_word_sreg(cpu, SEG_ES, dest, &val2)) {
+				return;
+			}
+			if (!read_word_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val1)) {
+				return;
+			}
+			i80386_alu_cmp16(cpu, &val1, val2);
+		}
+	}
+	else {
+		uint8_t val1 = 0;
+		uint8_t val2 = 0;
+		if (!read_byte_sreg(cpu, SEG_ES, dest, &val2)) {
+			return;
+		}
+		if (!read_byte_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val1)) {
+			return;
+		}
+		i80386_alu_cmp8(cpu, &val1, val2);
+	}
+
+	/* Adjust si/di delta */
+	src += adjustment;
+	dest += adjustment;
+
+	if (cpu->address_size) {
+		cpu->esi = src;
+		cpu->edi = dest;
+		cpu->ecx = counter;
+	}
+	else {
+		cpu->si = src & 0xFFFF;
+		cpu->di = dest & 0xFFFF;
+		cpu->cx = counter & 0xFFFF;
+	}
+
+	/* Rep prefix check */
+	if (F1 && cpu->psw.zf == F1Z) {
+		i80386_rollback_instruction(cpu); /* allow interrupts */
+	}
+}
+static void scas(I80386* cpu) {
+	/* scas [ES:eDI] (AE/AF) b1010111W */
+	uint32_t dest = 0;
+	uint32_t counter = 0;
+	uint32_t adjustment = 0;
+
+	if (cpu->address_size) {
+		dest = cpu->edi;
+		counter = cpu->ecx;
+	}
+	else {
+		dest = cpu->di;
+		counter = cpu->cx;
+	}
+
+	/* calculate adjustment len */
+	adjustment = W ? cpu->operand_size ? 4 : 2 : 1;
+	if (cpu->psw.df) {
+		adjustment = 0U - adjustment;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	/* Rep prefix check */
+	if (F1) {
+		if (counter == 0) {
+			return;
+		}
+		counter -= 1;
+	}
+
+	/* Do string operation */
+	if (W) {
+		if (cpu->operand_size) {
+			uint32_t val = 0;
+			if (!read_dword_sreg(cpu, SEG_ES, dest, &val)) {
+				return;
+			}
+			i80386_alu_cmp32(cpu, &cpu->eax, val);			
+		}
+		else {
+			uint16_t val = 0;
+			if (!read_word_sreg(cpu, SEG_ES, dest, &val)) {
+				return;
+			}
+			i80386_alu_cmp16(cpu, &cpu->ax, val);
+		}
+	}
+	else {
+		uint8_t val = 0;
+		if (!read_byte_sreg(cpu, SEG_ES, dest, &val)) {
+			return;
+		}
+		i80386_alu_cmp8(cpu, &cpu->al, val);
+	}
+
+	/* Rep prefix check */
+	if (F1 && cpu->psw.zf == F1Z) {
+		i80386_rollback_instruction(cpu); /* allow interrupts */
+	}
+
+	/* Adjust si/di delta */
+	dest += adjustment;
+
+	if (cpu->address_size) {
+		cpu->edi = dest;
+		cpu->ecx = counter;
+	}
+	else {
+		cpu->di = dest & 0xFFFF;
+		cpu->cx = counter & 0xFFFF;
+	}
+}
+static void ins(I80386* cpu) {
+	/* ins [ES:eDI], DX (6C/6D) b0110110W */
+	uint32_t dest = 0;
+	uint32_t counter = 0;
+	uint32_t adjustment = 0;
+
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	if (cpu->address_size) {
+		dest = cpu->edi;
+		counter = cpu->ecx;
+	}
+	else {
+		dest = cpu->di;
+		counter = cpu->cx;
+	}
+
+	/* calculate adjustment len */
+	adjustment = W ? cpu->operand_size ? 4 : 2 : 1;
+	if (cpu->psw.df) {
+		adjustment = 0U - adjustment;
+	}
+
+	/* Rep prefix check */
+	if (F1) {
+		if (counter == 0) {
+			return;
+		}
+		counter -= 1;
+	}
+
+	/* Do string operation */
+	uint32_t val = cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx);
+	if (W) {
+		val |= cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx + 1) << 8;
+		if (cpu->operand_size) {
+			val |= cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx + 2) << 16;
+			val |= cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx + 3) << 24;
+			if (!write_dword_sreg(cpu, SEG_ES, dest, val)) {
+				return;
+			}
+		}
+		else {
+			if (!write_word_sreg(cpu, SEG_ES, dest, val & 0xFFFF)) {
+				return;
 			}
 		}
 	}
 	else {
-		if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &AL)){
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
+		if (!write_byte_sreg(cpu, SEG_ES, dest, val & 0xFF)) {
+			return;
 		}
 	}
 
 	/* Adjust si/di delta */
-	if (DF) {
-		SI -= (1 << W);
+	dest += adjustment;
+
+	if (cpu->address_size) {
+		cpu->edi = dest;
+		cpu->ecx = counter;
 	}
 	else {
-		SI += (1 << W);
+		cpu->di = dest & 0xFFFF;
+		cpu->cx = counter & 0xFFFF;
 	}
-}
-static void cmps(I80286* cpu) {
-	/* cmps (A6/A7) b1010011W */
-
+	
 	/* Rep prefix check */
 	if (F1) {
-		if (CX == 0) {
-			return;
-		}
-		CX -= 1;
+		i80386_rollback_instruction(cpu); /* allow interrupts */
+	}
+}
+static void outs(I80386* cpu) {
+	/* outs DX, [DS:eSI] - (6E/6F) b0110111W */
+	uint32_t src = 0;
+	uint32_t counter = 0;
+	uint32_t adjustment = 0;
+
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
 	}
 
-	uint16_t adjustment = 0;
-	if (DF) {
-		adjustment = 0xFFFF;
+	if (cpu->address_size) {
+		src = cpu->esi;
+		counter = cpu->ecx;
 	}
 	else {
-		adjustment = 1;
+		src = cpu->si;
+		counter = cpu->cx;
+	}
+
+	/* calculate adjustment len */
+	adjustment = W ? cpu->operand_size ? 4 : 2 : 1;
+	if (cpu->psw.df) {
+		adjustment = 0U - adjustment;
+	}
+	
+	/* Rep prefix check */
+	if (F1) {
+		if (counter == 0) {
+			return;
+		}
+		counter -= 1;
 	}
 
 	/* Do string operation */
 	if (W) {
-		uint16_t src = 0;
-		uint16_t dest = 0;
-		if (read_word(cpu, ES, DI, &dest)) {
-			if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
-				i80286_alu_cmp16(cpu, src, dest);
-				/* Rep prefix check */
-				if (F1 && ZF == F1Z) {
-					IP -= cpu->instruction_len; /* Allow interrupts */
-				}
+		if (cpu->operand_size) {
+			uint32_t val = 0;
+			if (!read_dword_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val)) {
+				return;
 			}
-			SI += adjustment;
-			SI += adjustment;
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx, val & 0xFF);
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx + 1, (val >> 8) & 0xFF);
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx + 2, (val >> 16) & 0xFF);
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx + 3, (val >> 24) & 0xFF);
 		}
 		else {
-			if (F1) CX += 1; /* Yes, CX doesnt change if DI caused an exception. This makes sense. */
+			uint16_t val = 0;
+			if (!read_word_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val)) {
+				return;
+			}
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx, val & 0xFF);
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx + 1, (val >> 8) & 0xFF);
 		}
-		DI += adjustment;
-		DI += adjustment;
 	}
 	else {
-		uint8_t src = 0;
-		uint8_t dest = 0;
-		if (read_byte(cpu, ES, DI, &dest)) {
-			if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
-				i80286_alu_cmp8(cpu, src, dest);
-				/* Rep prefix check */
-				if (F1 && ZF == F1Z) {
-					IP -= cpu->instruction_len; /* Allow interrupts */
-				}
-			}
-			SI += adjustment;
+		uint8_t val = 0;
+		if (!read_byte_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), src, &val)) {
+			return;
 		}
-		else {
-			if (F1) CX += 1; /* Yes, CX doesnt change if DI caused an exception. This makes sense. */
-		}
-		DI += adjustment;
+		cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx, val);
 	}
-}
-static void scas(I80286* cpu) {
-	/* scas (AE/AF) b1010111W */
 
 	/* Rep prefix check */
 	if (F1) {
-		if (CX == 0) {
-			return;
-		}
-		CX -= 1;
-	}
-
-	/* Do string operation */
-	if (W) {
-		uint16_t dest = 0;
-		if (read_word(cpu, ES, DI, &dest)) {
-			i80286_alu_cmp16(cpu, AX, dest);
-			/* Rep prefix check */
-			if (F1 && ZF == F1Z) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-		}
-	}
-	else {
-		uint8_t dest = 0;
-		if (read_byte(cpu, ES, DI, &dest)) {
-			i80286_alu_cmp8(cpu, AL, dest);
-			/* Rep prefix check */
-			if (F1 && ZF == F1Z) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-		}
+		i80386_rollback_instruction(cpu); /* allow interrupts */
 	}
 
 	/* Adjust si/di delta */
-	if (DF) {
-		DI -= (1 << W);
+	src += adjustment;
+
+	if (cpu->address_size) {
+		cpu->esi = src;
+		cpu->ecx = counter;
 	}
 	else {
-		DI += (1 << W);
+		cpu->si = src & 0xFFFF;
+		cpu->cx = counter & 0xFFFF;
 	}
 }
-static void ins(I80286* cpu) {
-	/* ins (6C/6D) b0110110W */
 
-	/* Rep prefix check */
-	if (F1) {
-		if (CX == 0) {
-			return;
-		}
-		CX -= 1;
+static void les(I80386* cpu) {
+	/* les (Mp) (C4) b11000100 */
+	exec_bin_load_segment(cpu, SEG_ES);
+}
+static void lds(I80386* cpu) {
+	/* lds (Mp) (C5) b11000101 */
+	exec_bin_load_segment(cpu, SEG_DS);
+}
+static void lss(I80386* cpu) {
+	/* lss (Mp) (0F B2) b10110010 */
+	exec_bin_load_segment(cpu, SEG_SS);
+}
+static void lfs(I80386* cpu) {
+	/* lfs (Mp) (0F B4) b10110100 */
+	exec_bin_load_segment(cpu, SEG_FS);
+}
+static void lgs(I80386* cpu) {
+	/* lgs (Mp) (0F B5) b10110101 */
+	exec_bin_load_segment(cpu, SEG_GS);
+}
+
+static void xlat(I80386* cpu) {
+	/* Get data pointed by (E)BX + AL (D7) b11010111 */
+	uint32_t offset = 0;
+	uint8_t entry = 0;
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
 	}
 
-	/* Do string operation */
-	if (W) {
-		uint16_t dest = (READ_IO_BYTE(DX) | (READ_IO_BYTE(DX + 1) << 8));
-		if (write_word(cpu, ES, DI, dest)) {
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-		}
-		else {
-			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
-		}
+	if (cpu->address_size) {
+		offset = cpu->ebx + cpu->al;
 	}
 	else {
-		uint8_t dest = READ_IO_BYTE(DX);
-		if (write_byte(cpu, ES, DI, dest)) {
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-		}
-		else {
-			if (F1) CX -= 1; /* Yes, the 80286 DECREMENTS CX another time if DI caused an exception. Why the fuck? */
-		}
+		offset = cpu->bx + cpu->al;
 	}
-
-	/* Adjust si/di delta */
-	if (DF) {
-		DI -= (1 << W);
+	if (!read_byte_sreg(cpu, GET_SEG_OVERRIDE(SEG_DS), offset, &entry)) {
+		return;
 	}
-	else {
-		DI += (1 << W);
-	}
-}
-static void outs(I80286* cpu) {
-	/* ins (6E/6F) b0110111W */
-
-	/* Rep prefix check */
-	if (F1) {
-		if (CX == 0) {
-			return;
-		}
-		CX -= 1;
-	}
-
-	/* Do string operation */
-	if (W) {
-		uint16_t src = 0;
-		if (read_word(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-			WRITE_IO_BYTE(DX, src & 0xFF);
-			WRITE_IO_BYTE(DX+1, (src >> 8) & 0xFF);
-		}
-	}
-	else {
-		uint8_t src = 0;
-		if (read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), SI, &src)) {
-			/* Rep prefix check */
-			if (F1) {
-				IP -= cpu->instruction_len; /* Allow interrupts */
-			}
-			WRITE_IO_BYTE(DX, src);
-		}
-	}
-
-	/* Adjust si/di delta */
-	if (DF) {
-		SI -= (1 << W);
-	}
-	else {
-		SI += (1 << W);
-	}
+	
+	cpu->al = entry;
 }
 
-static void les(I80286* cpu) {
-	/* les (C4) b11000100 */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-
-	uint16_t segment = modrm_get_segment(cpu);
-	uint16_t offset = 0;
-	if (!modrm_get_offset(cpu, &offset)) {
-		return;
-	}
-	uint16_t tmp = 0;
-	if (!read_word(cpu, segment, offset, &tmp)) {
-		return;
-	}
-	modrm_write_reg16(cpu, tmp);
-	read_word(cpu, segment, offset + 2, &ES);
-}
-static void lds(I80286* cpu) {
-	/* lds (C5) b11000101 */
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-
-	uint16_t segment = modrm_get_segment(cpu);
-	uint16_t offset = 0;
-	if (!modrm_get_offset(cpu, &offset)) {
-		return;
-	}
-	uint16_t tmp = 0;
-	if (!read_word(cpu, segment, offset, &tmp)) {
-		return;
-	}
-	modrm_write_reg16(cpu, tmp);
-	read_word(cpu, segment, offset + 2, &DS);
-}
-
-static void xlat(I80286* cpu) {
-	/* Get data pointed by BX + AL (D7) b11010111 */
-	uint8_t mem = 0;
-	read_byte(cpu, SEG_DEFAULT_OR_OVERRIDE(SEG_DS), BX + AL, &mem);
-	AL = mem;
-}
-
-static void esc(I80286* cpu) {
+static void esc(I80386* cpu) {
 	/* esc (D8-DF R/M reg = XXX) b11010REG */
+	uint8_t esc_opcode = 0;
+	uint16_t reg = 0;
+	I80386_OPERAND rm = { 0 };
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
-	uint8_t esc_opcode = ((cpu->opcode & 7) << 3) | cpu->modrm.u.bits.reg;
-	uint16_t reg = reg16_read(cpu, cpu->opcode);
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
+	if (!modrm_get_rm(cpu, &rm)) {
 		return;
 	}
-	if (rm.is_reg == 0 && rm.u.mem.offset == 0xFFFF) {
-		i80286_exception(cpu, EXCEPTION_GP);
+	if (rm.type == OPERAND_TYPE_MEMORY && rm.mem.ea.logical_address.offset == 0xFFFF) {
+		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
-	(void)esc_opcode;
-	(void)reg;
-	(void)rm;
+	esc_opcode = ((cpu->opcode & 7) << 3) | cpu->modrm.reg;
+	reg = reg16_read(cpu, cpu->opcode);
 }
 
-static void loopnz(I80286* cpu) {
-	/* loop while not zero (E0) b1110000Z */
+static void in_accum_imm(I80386* cpu) {
+	/* in AL/AX/EAX, imm - (E4/E5) b0000000W  */
 	uint8_t imm = 0;
-	if (!fetch_byte(cpu, &imm)) {
-		return;
-	}
-	uint16_t se = sign_extend8_16(imm);
-	CX -= 1;
-	if (CX && !ZF) {
-		IP += se;
-	}
-}
-static void loopz(I80286* cpu) {
-	/* loop while zero (E1) b1110000Z */
-	uint8_t imm = 0;
-	if (!fetch_byte(cpu, &imm)) {
-		return;
-	}
-	uint16_t se = sign_extend8_16(imm);
-	CX -= 1;
-	if (CX && ZF) {
-		IP += se;
-	}
-}
-static void loop(I80286* cpu) {
-	/* loop if CX not zero (E2) b11100010 */
-	uint8_t imm = 0;
-	if (!fetch_byte(cpu, &imm)) {
-		return;
-	}
-	uint16_t se = sign_extend8_16(imm);
-	CX -= 1;
-	if (CX) {
-		IP += se;
-	}
-}
 
-static void in_accum_imm(I80286* cpu) {
-	/* in AL/AX, imm */
-	uint8_t imm = 0;
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
 	if (!fetch_byte(cpu, &imm)) {
 		return;
 	}
+	cpu->al = cpu->funcs.read_io_byte(cpu->funcs.user_param, imm);
 	if (W) {
-		AX = (READ_IO_BYTE(imm) | (READ_IO_BYTE(imm + 1) << 8));
-	}
-	else {
-		AL = READ_IO_BYTE(imm);
-	}
+		cpu->ah = cpu->funcs.read_io_byte(cpu->funcs.user_param, imm + 1);
+		if (cpu->operand_size) {
+			cpu->eax = cpu->eax & 0x0000FFFF;
+			cpu->eax |= cpu->funcs.read_io_byte(cpu->funcs.user_param, imm + 2) << 16;
+			cpu->eax |= cpu->funcs.read_io_byte(cpu->funcs.user_param, imm + 3) << 24;
+		}
+	}	
 }
-static void out_accum_imm(I80286* cpu) {
-	/* out imm, AL/AX */
+static void out_accum_imm(I80386* cpu) {
+	/* out imm, AL/AX/EAX - (E6/E7) b0000000W */
 	uint8_t imm = 0;
+
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
 	if (!fetch_byte(cpu, &imm)) {
 		return;
 	}
+	cpu->funcs.write_io_byte(cpu->funcs.user_param, imm, cpu->al);
 	if (W) {
-		WRITE_IO_BYTE(imm, AL);
-		WRITE_IO_BYTE(imm + 1, AH);
-	}
-	else {
-		WRITE_IO_BYTE(imm, AL);
+		cpu->funcs.write_io_byte(cpu->funcs.user_param, imm + 1, cpu->ah);
+		if (cpu->operand_size) {
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, imm + 2, (cpu->eax >> 16) & 0xFF);
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, imm + 3, (cpu->eax >> 24) & 0xFF);
+		}
 	}
 }
-static void in_accum_dx(I80286* cpu) {
-	/* in AL/AX, DX */
-	if (W) {
-		AX = (READ_IO_BYTE(DX) | (READ_IO_BYTE(DX + 1) << 8));
+static void in_accum_dx(I80386* cpu) {
+	/* in AL/AX/EAX, DX - (EC/ED) b0000000W */
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
 	}
-	else {
-		AL = READ_IO_BYTE(DX);
+
+	cpu->al = cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx);
+	if (W) {
+		cpu->ah = cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx + 1);
+		if (cpu->operand_size) {
+			cpu->eax = cpu->eax & 0x0000FFFF;
+			cpu->eax |= cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx + 2) << 16;
+			cpu->eax |= cpu->funcs.read_io_byte(cpu->funcs.user_param, cpu->dx + 3) << 24;
+		}
 	}
 }
-static void out_accum_dx(I80286* cpu) {
-	/* out DX, AL/AX */
-	if (W) {
-		WRITE_IO_BYTE(DX, AL);
-		WRITE_IO_BYTE(DX + 1, AH);
+static void out_accum_dx(I80386* cpu) {
+	/* out DX, AL/AX/EAX - (EE/EF) b0000000W  */
+	if (cpu->cpl > cpu->psw.iopl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
 	}
-	else {
-		WRITE_IO_BYTE(DX, AL);
+
+	cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx, cpu->al);
+	if (W) {
+		cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx + 1, cpu->ah);
+		if (cpu->operand_size) {
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx + 2, (cpu->eax >> 16) & 0xFF);
+			cpu->funcs.write_io_byte(cpu->funcs.user_param, cpu->dx + 3, (cpu->eax >> 24) & 0xFF);
+		}
 	}
 }
 
-static void int_(I80286* cpu) {
-	/* interrupt CD b11001101 */	
+static void int_(I80386* cpu) {
+	/* Ib - interrupt CD b11001101 */
 	uint8_t type = 0;
 	if (!fetch_byte(cpu, &type)) {
 		return;
 	}
-	i80286_int(cpu, type);
+	i80386_int(cpu, type, I80386_INTERRUPT_TYPE_SOFTWARE);
 }
-static void int3(I80286* cpu) {
+static void int3(I80386* cpu) {
 	/* interrupt CC b11001100 */
-	i80286_int(cpu, INT_3);
+	i80386_int(cpu, INT_3, I80386_INTERRUPT_TYPE_SOFTWARE);
 }
-static void into(I80286* cpu) {
+static void into(I80386* cpu) {
 	/* interrupt on overflow (CE) b11001110 */
-	if (OF) {
-		i80286_int(cpu, INT_OVERFLOW);
+	if (cpu->psw.of) {
+		i80386_int(cpu, INT_OVERFLOW, I80386_INTERRUPT_TYPE_SOFTWARE);
 	}
 }
-static void iret(I80286* cpu) {
+static void iret(I80386* cpu) {
 	/* return from interrupt (CF) b11001111 */
-	pop_word(cpu, &IP);
-	pop_word(cpu, &CS);
+	uint16_t ip = 0;
+	uint16_t cs = 0;
 	uint16_t psw = 0;
-	pop_word(cpu, &psw);
-	PSW = (psw | 0x0002) & 0x0FD7;
+	if (!pop_word(cpu, &ip)) {
+		return;
+	}
+	if (!pop_word(cpu, &cs)) {
+		return;
+	}
+	if (!pop_word(cpu, &psw)) {
+		return;
+	}
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, cs)) {
+		return;
+	}
+	cpu->eip = ip;
+	cpu->psw.word = (psw | 0x0002) & 0x0FD7;
 }
 
-static void bound(I80286* cpu) {
-	/* bound (62) b01100010 */
-
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	uint16_t reg = modrm_read_reg16(cpu);
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
-	}
-
-	if (rm.is_reg) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-	else if (rm.u.mem.offset == 0xFFFF || rm.u.mem.offset == 0xFFFD) { /* 286: Only 0xFFFD and 0xFFFF cause #GP */
-		i80286_exception(cpu, EXCEPTION_GP);
-		return;
-	}
-
+static void bound(I80386* cpu) {
+	/* Gv,Ma - bound (62) b01100010 */
+	uint16_t reg = 0;
+	I80386_OPERAND rm = { 0 };
 	uint16_t low = 0;
 	uint16_t high = 0;
-	modrm_read_rm16(cpu, rm, &low);
-	rm.u.mem.offset += 2;
-	modrm_read_rm16(cpu, rm, &high);
 
-	if ((int16_t)reg < (int16_t)low || (int16_t)reg >(int16_t)high) {
-		i80286_exception(cpu, INT_BOUNDS);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (rm.type == OPERAND_TYPE_GENERAL_REGISTER) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+	else if (rm.mem.ea.logical_address.offset == 0xFFFF || rm.mem.ea.logical_address.offset == 0xFFFD) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	if (!modrm_read_rm16(cpu, &rm, &low)) {
+		return;
+	}
+	rm.mem.ea.logical_address.offset += 2;
+	if (!modrm_read_rm16(cpu, &rm, &high)) {
+		return;
+	}
+	reg = modrm_read_reg16(cpu);
+
+	if ((int16_t)reg < (int16_t)low || (int16_t)reg > (int16_t)high) {
+		i80386_exception(cpu, INT_BOUNDS);
+		return;
 	}
 }
 
-static int get_descriptor_table(I80286* cpu, uint16_t selector, I80286_DESCRIPTOR* descriptor) {
-	uint16_t index = selector >> 0x03;
-	int ti = selector & 0x04;
-	uint24_t base = 0;
+static void sldt(I80386* cpu) {
+	/* Ew - Store LDT (0F 00 /0) */
 
-	if (ti) {
-		/* LDT */
-		if (index * 8 >= cpu->ldt.descriptor.limit) {
-			i80286_exception(cpu, EXCEPTION_GP);
-			return 0;
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+}
+static void str(I80386* cpu) {
+	/* Ew - Store task register (0F 00 /1) */
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+}
+static void lldt(I80386* cpu) {
+	/* Ew - Load LDT (0F 00 /2) */
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+}
+static void ltr(I80386* cpu) {
+	/* Ew - Load task register (0F 00 /3) */
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+}
+static void verr(I80386* cpu) {
+	/* Ew - (0F 00 /4) */
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+}
+static void verw(I80386* cpu) {
+	/* Ew - (0F 00 /5) */
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+}
+
+static void sgdt(I80386* cpu) {
+	/* Store GDT Ms - (0F 01 /0) */
+	exec_bin_store_descriptor_table_register(cpu, &cpu->gdtr);
+}
+static void sidt(I80386* cpu) {
+	/* Store IDT Ms - (0F 01 /1) */
+	exec_bin_store_descriptor_table_register(cpu, &cpu->idtr);
+}
+static void lgdt(I80386* cpu) {
+	/* Load GDT Ms - (0F 01 /2) */
+	exec_bin_load_descriptor_table_register(cpu, &cpu->gdtr);
+}
+static void lidt(I80386* cpu) {
+	/* Load IDT Ms - (0F 01 /3) */
+	exec_bin_load_descriptor_table_register(cpu, &cpu->idtr);
+}
+static void smsw(I80386* cpu) {
+	/* Store MSW Ew - (0F 01 /4) */
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	modrm_write_rm16(cpu, &rm, cpu->msw.word);
+}
+static void lmsw(I80386* cpu) {
+	/* Load MSW Ew - (0F 01 /6) */
+	I80386_OPERAND rm = { 0 };
+	uint16_t msw = 0;
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (!modrm_read_rm16(cpu, &rm, &msw)) {
+		return;
+	}
+
+	/* PE can be reset only by loading CR0, it cannot be reset by the LMSW instruction. */
+	cpu->msw.word = (cpu->msw.word & 0x1) | msw;
+}
+static void lar(I80386* cpu) {
+	/* Load access rights Gw,Ew - (0F 02 /r) */
+	I80386_OPERAND rm = { 0 };
+	uint16_t selector = 0;
+	I80386_DESCRIPTOR_TABLE_ENTRY descriptor = { 0 };
+
+	cpu->psw.zf = 0; /* ZF=0 indicates failure */
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (!modrm_read_rm16(cpu, &rm, &selector)) {
+		return;
+	}
+	if (selector == 0) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+	if (!i80386_read_descriptor_table_entry(cpu, selector, &descriptor)) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+	if (descriptor.access.dpl < cpu->cpl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	modrm_write_reg16(cpu, descriptor.access.byte);
+	cpu->psw.zf = 1; /* ZF=1 indicates success */
+}
+static void lsl(I80386* cpu) {
+	/* Load segment limit Gv,Ew - (0F 03 /r) */
+	I80386_OPERAND rm = { 0 };
+	uint16_t selector = 0;
+	I80386_DESCRIPTOR_TABLE_ENTRY descriptor = { 0 };
+
+	cpu->psw.zf = 0; /* ZF=0 indicates failure */
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	if (!modrm_read_rm16(cpu, &rm, &selector)){
+		return;
+	}
+	if (selector == 0) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+	if (!i80386_read_descriptor_table_entry(cpu, selector, &descriptor)) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+	if (descriptor.access.dpl < cpu->cpl) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	modrm_write_reg16(cpu, descriptor.limit_lo);
+	cpu->psw.zf = 1; /* ZF=1 indicates success */
+}
+static void clts(I80386* cpu) {
+	/* clear TS (0F 06) */
+
+	if (cpu->cpl != 0) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	cpu->msw.ts = 0;
+}
+static void arpl(I80386* cpu) {
+	/* ARPL Ew,Gw - (63 /r) */
+
+	I80386_OPERAND rm = { 0 };
+	uint16_t reg = 0;
+	uint16_t dst = 0;
+
+	/* real mode or virtual 8086 raises #UD */
+	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+	reg = modrm_read_reg16(cpu);
+
+	if (!modrm_read_rm16(cpu, &rm, &dst)) {
+		return;
+	}
+
+	uint16_t dst_rpl = dst & 3;
+	uint16_t src_rpl = reg & 3;
+
+	if (dst_rpl < src_rpl) {
+		dst = (dst & ~3) | src_rpl;
+		if (!modrm_write_rm16(cpu, &rm, dst)) {
+			cpu->psw.zf = 0;
+			return;
 		}
-		base = cpu->ldt.descriptor.base;
+		cpu->psw.zf = 1;
 	}
 	else {
-		/* GDT */
-		if (index * 8 >= cpu->gdtr.limit) {
-			i80286_exception(cpu, EXCEPTION_GP);
-			return 0;
+		cpu->psw.zf = 0;
+	}
+}
+
+static void loadall_dtr(I80386* cpu, uint32_t base, uint32_t offset, I80386_DESCRIPTOR_TABLE_REGISTER* dtr) {
+	read_dword_logical(cpu, base, offset + 4, &dtr->base);
+	read_dword_logical(cpu, base, offset + 8, &dtr->limit);
+}
+static void loadall_sreg(I80386* cpu, uint32_t base, uint32_t offset, I80386_SEGMENT_REGISTER* sreg) {
+	read_word_logical(cpu, base, offset + 0, &sreg->selector);
+}
+static void loadall_desc(I80386* cpu, uint32_t base, uint32_t offset, I80386_DESCRIPTOR_CACHE* descriptor) {
+	read_byte_physical(cpu, base + offset + 0, &descriptor->access.byte);
+	read_dword_physical(cpu, base + offset + 4, &descriptor->base);
+	read_dword_physical(cpu, base + offset + 8, &descriptor->limit);
+}
+static void loadall(I80386* cpu) {
+	/* 0F 07 - load all */
+
+	/* Must be ring 0 */
+	if (cpu->cpl != 0) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	uint32_t base = cpu->es.desc.base;
+	uint32_t offset = cpu->edi;
+
+	typedef struct LOADALL_DESC_CACHE {
+		uint32_t ar;
+		uint32_t address;
+		uint32_t limit;
+	} LOADALL_DESC_CACHE;
+
+	typedef struct LOADALL {
+		uint32_t cr0;
+		uint32_t eflags;
+		uint32_t eip;
+		uint32_t edi;
+		uint32_t esi;
+		uint32_t ebp;
+		uint32_t esp;
+		uint32_t ebx;
+		uint32_t edx;
+		uint32_t ecx;
+		uint32_t eax;
+		uint32_t dr6;
+		uint32_t dr7;
+		uint32_t tr;
+		uint32_t ldt_selector;
+		uint32_t gs_selector;
+		uint32_t fs_selector;
+		uint32_t ds_selector;
+		uint32_t ss_selector;
+		uint32_t cs_selector;
+		uint32_t es_selector;
+		LOADALL_DESC_CACHE tss;
+		LOADALL_DESC_CACHE idt;
+		LOADALL_DESC_CACHE gdt;
+		LOADALL_DESC_CACHE ldt;
+		LOADALL_DESC_CACHE gs;
+		LOADALL_DESC_CACHE fs;
+		LOADALL_DESC_CACHE ds;
+		LOADALL_DESC_CACHE ss;
+		LOADALL_DESC_CACHE cs;
+		LOADALL_DESC_CACHE es;
+		uint32_t length;
+	} LOADALL;
+
+	LOADALL buffer = { 0 };
+	for (int i = 0; i < sizeof(LOADALL) / sizeof(uint32_t); ++i) {
+		if (!read_dword_logical(cpu, base, offset + (i * sizeof(uint32_t)), &((uint32_t*)&buffer)[i])) {
+			return;
 		}
-		base = cpu->gdtr.base;
 	}
 
-	uint24_t address = base + (index * 8);
+	cpu->cr0.dword = buffer.cr0;
+	cpu->eflags.dword = buffer.eflags;
 
-	uint16_t limit = 0;
-	uint16_t base_lo = 0;
-	uint8_t  base_hi = 0;
-	read_word_linear(cpu, address, &limit);
-	read_word_linear(cpu, address + 2, &base_lo);
-	read_byte_linear(cpu, address + 4, &base_hi);
+	cpu->eip = buffer.eip;
+	cpu->edi = buffer.edi;
+	cpu->esi = buffer.esi;
+	cpu->ebp = buffer.ebp;
+	cpu->esp = buffer.esp;
+	cpu->ebx = buffer.ebx;
+	cpu->edx = buffer.edx;
+	cpu->ecx = buffer.ecx;
+	cpu->eax = buffer.eax;
 
-	descriptor->base = (uint24_t)base_lo | (base_hi << 16);
-	descriptor->limit = limit;
-	return 1;
+	cpu->dr6.dword = buffer.dr6;
+	cpu->dr7.dword = buffer.dr7;
+
+	cpu->tr.selector = buffer.tr & 0xFFFF;
+
+	//cpu->tss
+
+	cpu->idtr.base = buffer.idt.address;
+	cpu->idtr.limit = buffer.idt.limit;
+
+	cpu->gdtr.base = buffer.gdt.address;
+	cpu->gdtr.limit = buffer.gdt.limit;
+
+	cpu->ldtr.selector = buffer.ldt_selector & 0xFFFF;
+	cpu->ldtr.desc.base = buffer.ldt.address;
+	cpu->ldtr.desc.limit = buffer.ldt.limit;
+	cpu->ldtr.desc.access.byte = buffer.ldt.ar & 0xFF;
+
+	cpu->gs.selector = buffer.gs_selector & 0xFFFF;
+	cpu->gs.desc.base = buffer.gs.address;
+	cpu->gs.desc.limit = buffer.gs.limit;
+	cpu->gs.desc.access.byte = buffer.gs.ar & 0xFF;
+
+	cpu->fs.selector = buffer.fs_selector & 0xFFFF;
+	cpu->fs.desc.base = buffer.fs.address;
+	cpu->fs.desc.limit = buffer.fs.limit;
+	cpu->fs.desc.access.byte = buffer.fs.ar & 0xFF;
+
+	cpu->ds.selector = buffer.ds_selector & 0xFFFF;
+	cpu->ds.desc.base = buffer.ds.address;
+	cpu->ds.desc.limit = buffer.ds.limit;
+	cpu->ds.desc.access.byte = buffer.ds.ar & 0xFF;
+
+	cpu->ss.selector = buffer.ss_selector & 0xFFFF;
+	cpu->ss.desc.base = buffer.ss.address;
+	cpu->ss.desc.limit = buffer.ss.limit;
+	cpu->ss.desc.access.byte = buffer.ss.ar & 0xFF;
+
+	cpu->cs.selector = buffer.cs_selector & 0xFFFF;
+	cpu->cs.desc.base = buffer.cs.address;
+	cpu->cs.desc.limit = buffer.cs.limit;
+	cpu->cs.desc.access.byte = buffer.cs.ar & 0xFF;
+
+	cpu->es.selector = buffer.es_selector & 0xFFFF;
+	cpu->es.desc.base = buffer.es.address;
+	cpu->es.desc.limit = buffer.es.limit;
+	cpu->es.desc.access.byte = buffer.es.ar & 0xFF;
 }
 
-static void sldt(I80286* cpu) {
-	/* 0F 00 /0 */
-}
+static void setcc(I80386* cpu) {
+	/* setcc Eb - (0F 90-9F) b1001CCCC */
+	I80386_OPERAND rm = { 0 };
+	int b = 0;
 
-static void str(I80286* cpu) {
-	/* 0F 00 /1 */
-}
-
-static void lldt(I80286* cpu) {
-	/* 0F 00 /2 */
-}
-
-static void ltr(I80286* cpu) {
-	/* 0F 00 /3 - Load task register */
-
-	if (!cpu->msw.u.bits.pe) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-}
-
-static void verr(I80286* cpu) {
-	/* 0F 00 /4 */
-}
-
-static void verw(I80286* cpu) {
-	/* 0F 00 /5 */
-}
-
-
-static void sgdt(I80286* cpu) {
-	/* 0F 01 /0 */
-
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
 
-	uint16_t offset = 0;
-	uint16_t segment = 0;
-	modrm_get_offset(cpu, &offset);
-	segment = modrm_get_segment(cpu);
-
-	uint16_t limit = cpu->gdtr.limit;
-	uint16_t base_lo = (uint16_t)(cpu->gdtr.base & 0xFFFF);
-	uint8_t  base_hi = (uint8_t)((cpu->gdtr.base >> 16) & 0xFF);
-
-	if (!write_word(cpu, segment, offset + 0, limit)) {
-		return;
-	}
-	if (!write_word(cpu, segment, offset + 2, base_lo)) {
-		return;
-	}
-	if (!write_byte(cpu, segment, offset + 4, base_hi)) {
-		return;
-	}
-}
-
-static void sidt(I80286* cpu) {
-	/* 0F 01 /1 */	
-	
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-
-	uint16_t offset = 0;
-	uint16_t segment = 0;
-	modrm_get_offset(cpu, &offset);
-	segment = modrm_get_segment(cpu);
-
-	uint16_t limit = cpu->idtr.limit;
-	uint16_t base_lo = (uint16_t)(cpu->idtr.base & 0xFFFF);
-	uint8_t  base_hi = (uint8_t)((cpu->idtr.base >> 16) & 0xFF);
-
-	if (!write_word(cpu, segment, offset + 0, limit)) {
-		return;
-	}
-	if (!write_word(cpu, segment, offset + 2, base_lo)) {
-		return;
-	}
-	if (!write_byte(cpu, segment, offset + 4, base_hi)) {
-		return;
-	}
-}
-
-static void lgdt(I80286* cpu) {
-	/* 0F 01 /2 */
-
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-
-	if (cpu->msw.u.bits.pe && cpu->cpl > 0) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return;
-	}
-
-	uint16_t limit = 0;
-	uint16_t base_lo = 0;
-	uint8_t base_hi = 0;
-
-	uint16_t offset = 0;
-	uint16_t segment = 0;
-	modrm_get_offset(cpu, &offset);
-	segment = modrm_get_segment(cpu);
-
-	if (!read_word(cpu, segment, offset, &limit)) {
-		return;
-	}
-	if (!read_word(cpu, segment, offset + 2, &base_lo)) {
-		return;
-	}
-	if (!read_byte(cpu, segment, offset + 4, &base_hi)) {
-		return;
-	}
-
-	cpu->gdtr.base = (uint24_t)base_lo | (base_hi << 16);
-	cpu->gdtr.limit = limit;
-}
-
-static void lidt(I80286* cpu) {
-	/* 0F 01 /3 */
-
-	if (cpu->modrm.u.bits.mod == 0b11) {
-		i80286_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-
-	if (cpu->msw.u.bits.pe && cpu->cpl > 0) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return;
-	}
-
-	uint16_t limit = 0;
-	uint16_t base_lo = 0;
-	uint8_t base_hi = 0;
-
-	uint16_t offset = 0;
-	uint16_t segment = 0;
-	modrm_get_offset(cpu, &offset);
-	segment = modrm_get_segment(cpu);
-
-	if (!read_word(cpu, segment, offset, &limit)) {
-		return;
-	}
-	if (!read_word(cpu, segment, offset + 2, &base_lo)) {
-		return;
-	}
-	if (!read_byte(cpu, segment, offset + 4, &base_hi)) {
-		return;
-	}
-
-	cpu->idtr.base = (uint24_t)base_lo | (base_hi << 16);
-	cpu->idtr.limit = limit;
-}
-
-static void smsw(I80286* cpu) {
-	/* 0F 01 /4 */
-
-	OPERAND16 rm = { 0 };
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
-	}
-
-	modrm_write_rm16(cpu, rm, cpu->msw.u.word);
-}
-
-static void lmsw(I80286* cpu) {
-	/* 0F 01 /6 */
-
-	OPERAND16 rm = { 0 };
-	uint16_t msw = 0;
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
-	}
-
-	if (!modrm_read_rm16(cpu, rm, &msw)) {
-		return;
-	}
-
-	cpu->msw.u.word = (cpu->msw.u.word & 0x1) | msw;
-}
-
-static void lar(I80286* cpu) {
-	/* 0F 02 /r - Load access rights */
-
-	ZF = 0;
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
-
-	if (!cpu->msw.u.bits.pe) {
-		i80286_exception(cpu, EXCEPTION_UD);
+	if (!modrm_get_rm(cpu, &rm)) {
 		return;
 	}
 
-	OPERAND16 rm = { 0 };
-	uint16_t selector = 0;
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
-	}
-
-	if (!modrm_read_rm16(cpu, rm, &selector)) {
-		return;
-	}
-
-	if (selector == 0) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return;
-	}
-
-	I80286_DESCRIPTOR descriptor = { 0 };
-	if (!get_descriptor_table(cpu, selector, &descriptor)) {
-		return;
-	}
-
-	uint8_t dpl = (descriptor.access >> 5) & 3;
-	if (dpl < cpu->cpl) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return;
-	}
-
-	modrm_write_reg16(cpu, descriptor.access);
-	ZF = 1;
+	b = i80386_check_condition(cpu);
+	modrm_write_rm8(cpu, &rm, b & 0x1);
 }
+static void bt(I80386* cpu) {
+	/* bit test - bt Ev,Gv - (0F A3) b10100011 */
+	exec_bin_bit_test(cpu, i80386_alu_bt16, i80386_alu_bt32, RO);
+#if 0
+	I80386_OPERAND rm = {0};
 
-static void lsl(I80286* cpu) {
-	/* 0F 03 /r - Load segment limit */
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
 
-	ZF = 0;
 	if (!fetch_modrm(cpu)) {
 		return;
 	}
-
-	if (!cpu->msw.u.bits.pe) {
-		i80286_exception(cpu, EXCEPTION_UD);
+	if (!modrm_get_rm(cpu, &rm)) {
 		return;
 	}
 
-	OPERAND16 rm = { 0 };
-	uint16_t selector = 0;
-	if (!modrm_get_rm16(cpu, &rm)) {
-		return;
-	}
+	if (cpu->operand_size) {
+		uint32_t value = 0;
+		uint32_t index =0;
+		uint32_t bit = 0;
+		int32_t dword_offset = 0;
+		
+		index = modrm_read_reg32(cpu);
+		bit = index & 0x1F;
+		dword_offset = ((int32_t)index >> 5);
 
-	if (!modrm_read_rm16(cpu, rm, &selector)){
-		return;
-	}
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, dword_offset * 4)) {
+				return;
+			}			
+		}
 
-	if (selector == 0) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return;
-	}
+		if (!modrm_read_rm32(cpu, &rm, &value)) {
+			return;
+		}
 
-	I80286_DESCRIPTOR descriptor = { 0 };
-	if (!get_descriptor_table(cpu, selector, &descriptor)) {
-		return;
+		cpu->psw.cf = (value >> bit) & 0x1;
 	}
-	
-	uint8_t dpl = (descriptor.access >> 5) & 3;
-	if (dpl < cpu->cpl) {
-		i80286_exception(cpu, EXCEPTION_GP);
-		return;
-	}
+	else {
+		uint16_t value = 0;
+		uint16_t index = 0;
+		uint16_t bit = 0;
+		int16_t word_offset = 0;
 
-	modrm_write_reg16(cpu, descriptor.limit);
-	ZF = 1;
+		index = modrm_read_reg16(cpu);
+		bit = index & 0xF;
+		word_offset = ((int16_t)index >> 4);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, word_offset * 2)) {
+				return;
+			}
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &value)) {
+			return;
+		}
+
+		cpu->psw.cf = (value >> bit) & 0x1;
+	}
+#endif
 }
+static void bts(I80386* cpu) {
+	/* bit test set - bts Ev,Gv - (0F AB) b10101011 */
+	exec_bin_bit_test(cpu, i80386_alu_bts16, i80386_alu_bts32, WB);
+#if 0
+	I80386_OPERAND rm = { 0 };
 
-static void loadall_cache(I80286* cpu, uint16_t segment, uint16_t address, I80286_DESCRIPTOR* descriptor) {
-	uint8_t v1 = 0;
-	uint8_t v2 = 0;
-	uint8_t v3 = 0;
-	read_byte(cpu, segment, address, &v1);
-	read_byte(cpu, segment, address+1, &v2);
-	read_byte(cpu, segment, address+2, &v3);
-	descriptor->base = (uint24_t)v1 | (v2 << 8) | (v3 << 16);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
 
-	read_byte(cpu, segment, address+3, &v1);
-	descriptor->access = v1;
+	/* lock raises #UD */
+	if (cpu->lock_prefix && rm.type != OPERAND_TYPE_MEMORY) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
 
-	read_byte(cpu, segment, address + 4, &v1);
-	read_byte(cpu, segment, address + 5, &v2);
-	descriptor->limit = (uint16_t)v1 | (v2 << 8);
+	if (cpu->operand_size) {
+		uint32_t value = 0;
+		uint32_t index = 0;
+		uint32_t bit = 0;
+		int32_t dword_offset = 0;
+
+		index = modrm_read_reg32(cpu);
+		bit = index & 0x1F;
+		dword_offset = ((int32_t)index >> 5);
+		
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, dword_offset * 4)) {
+				return;
+			}
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &value)) {
+			return;
+		}
+
+		cpu->psw.cf = (value >> bit) & 0x1;
+		value |= (1 << bit);
+		modrm_write_rm32(cpu, &rm, value);
+	}
+	else {
+		uint16_t value = 0;
+		uint16_t index = 0;
+		uint16_t bit = 0;
+		int16_t word_offset = 0;
+
+		index = modrm_read_reg16(cpu);
+		bit = index & 0xF;
+		word_offset = ((int16_t)index >> 4);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, word_offset * 2)) {
+				return;
+			}
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &value)) {
+			return;
+		}
+
+		cpu->psw.cf = (value >> bit) & 0x1;
+		value |= (1 << bit);
+		modrm_write_rm16(cpu, &rm, value);
+	}
+#endif
 }
-static void loadall(I80286* cpu) {
-	/* 0F 05 - load all */
+static void btr(I80386* cpu) {
+	/* bit test reset - btr Ev,Gv - (0F B3) b10110011 */
+	exec_bin_bit_test(cpu, i80386_alu_btr16, i80386_alu_btr32, WB);
+#if 0
+	I80386_OPERAND rm = { 0 };
 
-	/* LOADALL reads a 102 byte area of physical memory starting at physical memory location 000800H.
-	The entire execution state of the 80286 is defined upon completion of this instruction. 
-	The descriptor cache registers for the ES, DS, SS, CS, TR, and LDT are directly loaded from this area. */
-	
-	read_word(cpu, 0x0000, 0x0806, &MSW);
-	read_word(cpu, 0x0000, 0x0816, &TR);
-	read_word(cpu, 0x0000, 0x0818, &PSW);
-	read_word(cpu, 0x0000, 0x081A, &IP);
-	read_word(cpu, 0x0000, 0x081C, &LDT);
-	read_word(cpu, 0x0000, 0x081E, &DS);
-	read_word(cpu, 0x0000, 0x0820, &SS);
-	read_word(cpu, 0x0000, 0x0822, &CS);
-	read_word(cpu, 0x0000, 0x0824, &ES);
-	read_word(cpu, 0x0000, 0x0826, &DI);
-	read_word(cpu, 0x0000, 0x0828, &SI);
-	read_word(cpu, 0x0000, 0x082A, &BP);
-	read_word(cpu, 0x0000, 0x082C, &SP);
-	read_word(cpu, 0x0000, 0x082E, &BX);
-	read_word(cpu, 0x0000, 0x0830, &DX);
-	read_word(cpu, 0x0000, 0x0832, &CX);
-	read_word(cpu, 0x0000, 0x0834, &AX);	
-	loadall_cache(cpu, 0x0000, 0x0836, &ES_CACHE);
-	loadall_cache(cpu, 0x0000, 0x083C, &CS_CACHE);
-	loadall_cache(cpu, 0x0000, 0x0842, &SS_CACHE);
-	loadall_cache(cpu, 0x0000, 0x0848, &DS_CACHE);
-	loadall_cache(cpu, 0x0000, 0x084E, &GDTR);
-	loadall_cache(cpu, 0x0000, 0x0854, &LDT_CACHE);
-	loadall_cache(cpu, 0x0000, 0x085A, &IDTR);
-	loadall_cache(cpu, 0x0000, 0x0860, &TSS);
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix && rm.type != OPERAND_TYPE_MEMORY) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t value = 0;
+		uint32_t index = 0;
+		uint32_t bit = 0;
+		int32_t dword_offset = 0;
+
+		index = modrm_read_reg32(cpu);
+		bit = index & 0x1F;
+		dword_offset = ((int32_t)index >> 5);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, dword_offset * 4)) {
+				return;
+			}
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &value)) {
+			return;
+		}
+
+		cpu->psw.cf = (value >> bit) & 0x1;
+		value &= ~(1 << bit);
+		modrm_write_rm32(cpu, &rm, value);
+	}
+	else {
+		uint16_t value = 0;
+		uint16_t index = 0;
+		uint16_t bit = 0;
+		int16_t word_offset = 0;
+
+		index = modrm_read_reg16(cpu);
+		bit = index & 0xF;
+		word_offset = ((int16_t)index >> 4);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, word_offset * 2)) {
+				return;
+			}
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &value)) {
+			return;
+		}
+
+		cpu->psw.cf = (value >> bit) & 0x1;
+		value &= ~(1 << bit);
+		modrm_write_rm16(cpu, &rm, value);
+	}
+#endif
 }
+static void btc(I80386* cpu) {
+	/* bit test complement - btc Ev,Gv - (0F BB) b10111011 */
+	exec_bin_bit_test(cpu, i80386_alu_btc16, i80386_alu_btc32, WB);
+#if 0
+	I80386_OPERAND rm = { 0 };
 
-static void clts(I80286* cpu) {
-	/* 0F 06 */
-	cpu->msw.u.bits.ts = 0;
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t value = 0;
+		uint32_t index = 0;
+		uint32_t bit = 0;
+		int32_t dword_offset = 0;
+
+		index = modrm_read_reg32(cpu);
+		bit = index & 0x1F;
+		dword_offset = ((int32_t)index >> 5);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, dword_offset * 4)) {
+				return;
+			}
+		}
+
+		if (!modrm_read_rm32(cpu, &rm, &value)) {
+			return;
+		}
+
+		cpu->psw.cf = (value >> bit) & 0x1;
+		value ^= (1 << bit);
+		modrm_write_rm32(cpu, &rm, value);
+	}
+	else {
+		uint16_t value = 0;
+		uint16_t index = 0;
+		uint16_t bit = 0;
+		int16_t word_offset = 0;
+
+		index = modrm_read_reg16(cpu);
+		bit = index & 0xF;
+		word_offset = ((int16_t)index >> 4);
+
+		if (rm.type == OPERAND_TYPE_MEMORY) {
+			if (!modrm_add_offset_rm(cpu, &rm, word_offset * 2)) {
+				return;
+			}
+		}
+
+		if (!modrm_read_rm16(cpu, &rm, &value)) {
+			return;
+		}
+
+		cpu->psw.cf = (value >> bit) & 0x1;
+		value ^= (1 << bit);
+		modrm_write_rm16(cpu, &rm, value);
+	}
+#endif
 }
+static void bsf(I80386* cpu) {
+	/* bit search forward - bsf Ev,Gv - (0F BC) b10111100 */
+	I80386_OPERAND rm = { 0 };
 
-static void arpl(I80286* cpu) {
-	/* 63 /r */
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t src;
+
+		if (!modrm_read_rm32(cpu, &rm, &src)) {
+			return;
+		}
+
+		/* check if destination is undefined */
+		if (src == 0) {
+			cpu->psw.zf = 1;
+			return;
+		}
+
+		cpu->psw.zf = 0;
+
+		for (int bit = 0; bit < 32; ++bit) {
+			if (src & (1U << bit)) {
+				modrm_write_reg32(cpu, bit);
+				return;
+			}
+		}
+	}
+	else {
+		uint16_t src;
+
+		if (!modrm_read_rm16(cpu, &rm, &src)) {
+			return;
+		}
+		
+		/* check if destination is undefined */
+		if (src == 0) {
+			cpu->psw.zf = 1;
+			return;
+		}
+
+		cpu->psw.zf = 0;
+
+		for (uint16_t bit = 0; bit < 16; ++bit) {
+			if (src & (1U << bit)) {
+				modrm_write_reg16(cpu, bit);
+				return;
+			}
+		}
+	}
+}
+static void bsr(I80386* cpu) {
+	/* bit search reverse - bsr Ev,Gv - (0F BD) b10111101 */
+	I80386_OPERAND rm = { 0 };
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t src;
+		if (!modrm_read_rm32(cpu, &rm, &src)) {
+			return;
+		}
+
+		/* check if destination is undefined */
+		if (src == 0) {
+			cpu->psw.zf = 1;
+			return;
+		}
+
+		cpu->psw.zf = 0;
+
+		for (uint32_t bit = 31; bit >= 1; --bit) {
+			if (src & (1U << bit)) {
+				modrm_write_reg32(cpu, bit);
+				return;
+			}
+		}
+		modrm_write_reg32(cpu, 0);
+	}
+	else {
+		uint16_t src;
+		if (!modrm_read_rm16(cpu, &rm, &src)) {
+			return;
+		}
+
+		/* check if destination is undefined */
+		if (src == 0) {
+			cpu->psw.zf = 1;
+			return;
+		}
+
+		cpu->psw.zf = 0;
+
+		for (uint16_t bit = 15; bit >= 1; --bit) {
+			if (src & (1U << bit)) {
+				modrm_write_reg16(cpu, bit);
+				return;
+			}
+		}
+		modrm_write_reg16(cpu, 0);
+	}
 }
 
 /* prefix byte */
-static int rep(I80286* cpu) {
+static int rep(I80386* cpu) {
 	/* rep/repz/repnz (F2/F3) b1111001Z */
 	cpu->internal_flags |= INTERNAL_FLAG_F1;    /* Set F1 */
 	cpu->internal_flags &= ~INTERNAL_FLAG_F1Z;  /* Clr F1Z */
-	cpu->internal_flags |= (cpu->opcode & 0x1); /* Set F1Z */
-
-	cpu->opcode = 0;
+	cpu->internal_flags |= (cpu->opcode & Z);   /* Set F1Z */
 	if (!fetch_byte(cpu, &cpu->opcode)) {
-		return I80286_DECODE_OK;
+		return I80386_DECODE_OK;
 	}
-	return I80286_DECODE_REQ_CYCLE;
+	return I80386_DECODE_REQ_CYCLE;
 }
-static int segment_override(I80286* cpu) {
+static int segment_override(I80386* cpu) {
 	/* (26/2E/36/3E) b001SR110 */
-	cpu->segment_prefix = SR;
-	cpu->opcode = 0;
+	cpu->segment_override = SR;
 	if (!fetch_byte(cpu, &cpu->opcode)) {
-		return I80286_DECODE_OK;
+		return I80386_DECODE_OK;
 	}
-	return I80286_DECODE_REQ_CYCLE;
+	return I80386_DECODE_REQ_CYCLE;
 }
-static int lock(I80286* cpu) {
+static int segment_override_extended(I80386* cpu) {
+	/* (64/65) b01100SRE */
+	cpu->segment_override = SRE;
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return I80386_DECODE_OK;
+	}
+	return I80386_DECODE_REQ_CYCLE;
+}
+static int lock(I80386* cpu) {
 	/* lock the bus (F0/F1) b11110000 */
 	cpu->lock_prefix = 1;
-	cpu->opcode = 0;
 	if (!fetch_byte(cpu, &cpu->opcode)) {
-		return I80286_DECODE_OK;
+		return I80386_DECODE_OK;
 	}
-	return I80286_DECODE_REQ_CYCLE;
+	return I80386_DECODE_REQ_CYCLE;
+}
+static int operand_size(I80386* cpu) {
+	cpu->operand_size ^= 0x1;
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return I80386_DECODE_OK;
+	}
+	return I80386_DECODE_REQ_CYCLE;
+}
+static int address_size(I80386* cpu) {
+	cpu->address_size ^= 0x1;
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return I80386_DECODE_OK;
+	}
+	return I80386_DECODE_REQ_CYCLE;
 }
 
+#if 0
+/* operand get/set proto */
+typedef enum {
+	AM_NONE,
+	AM_A, /* Direct address; operand is encoded in the instruction */
+	AM_C, /* The reg field of ModR/M byte selects a control register */
+	AM_D, /* The reg field of ModR/M byte selects a debug register */
+	AM_E, /* A ModR/M byte follows the opcode and specifies the operand */
+	AM_F, /* Eflags */
+	AM_G, /* The reg field of ModR/M byte selects a general register */
+	AM_I, /* Immediate data; operand is encoded in the instruction */
+	AM_J, /* The instruction contains a relative offset */
+	AM_M, /* The ModR/M byte may ONLY refer to memory */
+	AM_O, /* The instruction has no ModR/M byte. The offset of the operand is encoded asa word/dword in the instruction */
+	AM_R, /* The reg field of ModR/M byte may ONLY select a general register */
+	AM_S, /* The reg field of ModR/M byte selects a segment register */
+	AM_T, /* The reg field of ModR/M byte selects a test register */
+	AM_X, /* Memory addressed by DS:SI */
+	AM_Y, /* Memory addressed by ES:DI */
+} ADDRESSING_METHOD;
+
+typedef enum {
+	OT_NONE,
+	OT_a, /* Two word operands or two dword operands in memory (depending on operand size) */
+	OT_b, /* byte (regardless of operand size) */
+	OT_c, /* byte or word (depending on operand size) */
+	OT_d, /* dword (regardless of operand size) */
+	OT_p, /* 48bit or 64bit pointer (depending on operand size) */
+	OT_s, /* 6 byte pseudo descriptor */
+	OT_v, /* word or dword (depending on operand size) */
+	OT_w, /* word (regardless of operand size) */
+} OPERAND_ACCESS_TYPE;
+
+typedef enum {
+	OC_Eb = (AM_E << 8) | OT_b, /* ModR/M 8bit */
+	OC_Ew = (AM_E << 8) | OT_w, /* ModR/M 16bit */
+	OC_Ed = (AM_E << 8) | OT_d, /* ModR/M 32bit */
+	OC_Ev = (AM_E << 8) | OT_v, /* ModR/M 16/32bit (depending on operand size) */
+	OC_Gb = (AM_G << 8) | OT_b, /* GPR 8bit */
+	OC_Gw = (AM_G << 8) | OT_w, /* GPR 16bit */
+	OC_Gd = (AM_G << 8) | OT_d, /* GPR 32bit */
+	OC_Gv = (AM_G << 8) | OT_v, /* GPR 16/32bit (depending on operand size) */
+	OC_Ib = (AM_I << 8) | OT_b, /* Immediate 8bit */
+	OC_Iw = (AM_I << 8) | OT_w, /* Immediate 16bit */
+	OC_Id = (AM_I << 8) | OT_d, /* Immediate 32bit */
+	OC_Iv = (AM_I << 8) | OT_v, /* Immediate 16/32bit (depending on operand size) */
+	OC_Mp = (AM_M << 8) | OT_p,
+	OC_Av = (AM_A << 8) | OT_v,
+	OC_Ap = (AM_A << 8) | OT_p,
+} OPERAND_CODE;
+static int i80386_decode_operand_type(I80386* cpu, I80386_OPERAND* op, OPERAND_ACCESS_TYPE ot);
+static int i80386_decode_addressing_method(I80386* cpu, I80386_OPERAND* op, ADDRESSING_METHOD am);
+static int i80386_decode_operand_type(I80386* cpu, I80386_OPERAND* op, OPERAND_ACCESS_TYPE ot) {
+	switch (ot) {
+		case OT_a:
+			op->size = cpu->operand_size ? 8 : 4;
+			break;
+		case OT_b:
+			op->size = 1;
+			break;
+		case OT_c:
+			op->size = cpu->operand_size ? 2 : 1;
+			break;
+		case OT_d:
+			op->size = 4;
+			break;
+		case OT_p:
+			op->size = cpu->operand_size ? 8 : 6;
+			break;
+		case OT_s:
+			op->size = 6;
+			break;
+		case OT_v:
+			op->size = cpu->operand_size ? 4 : 2;
+			break;
+		case OT_w:
+			op->size = 2;
+			break;
+		default:
+			op->size = 0;
+			break;
+	}
+	return 1;
+}
+static int i80386_decode_addressing_method(I80386* cpu, I80386_OPERAND* op, ADDRESSING_METHOD am) {
+	switch (am) {
+		case AM_A:
+			op->type = OPERAND_TYPE_FAR_POINTER;
+			break;
+		case AM_C:
+			op->type = OPERAND_TYPE_CONTROL_REGISTER;
+			op->reg.index = cpu->modrm.reg;
+			break;
+		case AM_D:
+			op->type = OPERAND_TYPE_DEBUG_REGISTER;
+			op->reg.index = cpu->modrm.reg;
+			break;
+		case AM_E:
+			if (cpu->modrm.mod == 0b11) {
+				op->type = OPERAND_TYPE_GENERAL_REGISTER;
+				op->reg.index = cpu->modrm.rm;
+				return 1;
+			}
+			else {
+				op->type = OPERAND_TYPE_MEMORY;
+				return modrm_get_effective_address(cpu, &op->mem.ea);
+			}
+			break;
+		case AM_F:
+			op->type = OPERAND_TYPE_FLAGS;
+			break;
+		case AM_G:
+			op->type = OPERAND_TYPE_GENERAL_REGISTER;
+			op->reg.index = cpu->modrm.reg;
+			break;
+		case AM_I:
+			op->type = OPERAND_TYPE_IMMEDIATE;
+			break;
+		case AM_J:
+			op->type = OPERAND_TYPE_REL;
+			break;
+		case AM_M:
+			/* The mod R/M byte may refer only to memory */
+			if (cpu->modrm.mod == 0b11) {
+				i80386_exception(cpu, EXCEPTION_UD);
+				return 0;
+			}
+			op->type = OPERAND_TYPE_MEMORY;
+			return modrm_get_effective_address(cpu, &op->mem.ea);
+		case AM_O:
+			op->type = OPERAND_TYPE_IMMEDIATE;
+			break;
+		case AM_R:
+			/* The mod R/M byte may refer only to a register */
+			if (cpu->modrm.mod != 0b11) {
+				i80386_exception(cpu, EXCEPTION_UD);
+				return 0;
+			}
+			op->type = OPERAND_TYPE_GENERAL_REGISTER;
+			op->reg.index = cpu->modrm.rm;
+			break;
+		case AM_S:
+			op->type = OPERAND_TYPE_SEGMENT_REGISTER;
+			op->reg.index = cpu->modrm.rm;
+			break;
+		case AM_T:
+			op->type = OPERAND_TYPE_TEST_REGISTER;
+			op->reg.index = cpu->modrm.rm;
+			break;
+		case AM_X:
+			op->type = OPERAND_TYPE_MEMORY;
+			op->mem.ea.segment_index = GET_SEG_OVERRIDE(SEG_DS);
+			op->mem.ea.logical_address.base = cpu->segment_registers[op->mem.ea.segment_index].desc.base;
+			op->mem.ea.logical_address.offset = cpu->si;
+			break;
+		case AM_Y:
+			op->type = OPERAND_TYPE_MEMORY;
+			op->mem.ea.segment_index = SEG_ES;
+			op->mem.ea.logical_address.base = cpu->es.desc.base;
+			op->mem.ea.logical_address.offset = cpu->di;
+			break;
+	}
+	return 1;
+}
+
+static int i80386_get_operand(I80386* cpu, I80386_OPERAND* op, OPERAND_CODE oc) {
+	if (!i80386_decode_operand_type(cpu, op, oc & 0xFF)) {
+		return 0;
+	}
+	if (!i80386_decode_addressing_method(cpu, op, (oc >> 8) & 0xFF)) {
+		return 0;
+	}
+	return 1;
+}
+static int i80386_read_operand(I80386* cpu, const I80386_OPERAND* op, void* value) {
+	switch (op->type) {
+		case OPERAND_TYPE_MEMORY:
+			switch (op->size) {
+				case 1:
+					return read_byte_ea(cpu, &op->mem.ea, value);
+				case 2:
+					return read_word_ea(cpu, &op->mem.ea, value);
+				case 4:
+					return read_dword_ea(cpu, &op->mem.ea, value);
+				case 8:
+					return read_qword_ea(cpu, &op->mem.ea, value);
+				default:
+					return 0;
+			}
+			break;
+		case OPERAND_TYPE_IMMEDIATE:
+			switch (op->size) {
+				case 1:
+					return fetch_byte(cpu, value);
+				case 2:
+					return fetch_word(cpu, value);
+				case 4:
+					return fetch_dword(cpu, value);
+				default:
+					return 0;
+			}
+		case OPERAND_TYPE_GENERAL_REGISTER:
+			switch (op->size) {
+				case 1:
+					*(uint8_t*)value = reg8_read(cpu, op->reg.index);
+					return 1;
+				case 2:
+					*(uint16_t*)value = reg16_read(cpu, op->reg.index);
+					return 1;
+				case 4:
+					*(uint32_t*)value = reg32_read(cpu, op->reg.index);
+					return 1;
+				default:
+					return 0;
+			}
+		case OPERAND_TYPE_SEGMENT_REGISTER:
+			*(uint16_t*)value = cpu->segment_registers[op->reg.index].selector;
+			return 1;
+		case OPERAND_TYPE_CONTROL_REGISTER:
+			*(uint32_t*)value = cpu->control_registers[op->reg.index];
+			return 1;
+		case OPERAND_TYPE_DEBUG_REGISTER:
+			*(uint32_t*)value = cpu->debug_registers[op->reg.index];
+			return 1;
+		case OPERAND_TYPE_TEST_REGISTER:
+			*(uint32_t*)value = cpu->test_registers[op->reg.index];
+			return 1;
+		default:
+			return 0;
+	}
+}
+static int i80386_write_operand(I80386* cpu, const I80386_OPERAND* op, void* value) {
+	switch (op->type) {
+		case OPERAND_TYPE_MEMORY:
+			switch (op->size) {
+				case 1:
+					return write_byte_ea(cpu, &op->mem.ea, *(uint8_t*)value);
+				case 2:
+					return write_word_ea(cpu, &op->mem.ea, *(uint16_t*)value);
+				case 4:
+					return write_dword_ea(cpu, &op->mem.ea, *(uint32_t*)value);
+				case 8:
+					return write_qword_ea(cpu, &op->mem.ea, *(uint64_t*)value);
+				default:
+					return 0;
+			}
+			break;
+		case OPERAND_TYPE_IMMEDIATE:
+			return 0;
+		case OPERAND_TYPE_GENERAL_REGISTER:
+			switch (op->size) {
+				case 1:
+					reg8_write(cpu, op->reg.index, *(uint8_t*)value);
+					return 1;
+				case 2:
+					reg16_write(cpu, op->reg.index, *(uint16_t*)value);
+					return 1;
+				case 4:
+					reg32_write(cpu, op->reg.index, *(uint32_t*)value);
+					return 1;
+				default:
+					return 0;
+			}
+			break;
+		case OPERAND_TYPE_SEGMENT_REGISTER:
+			cpu->segment_registers[op->reg.index].selector = *(uint16_t*)value;
+			return 1;
+		case OPERAND_TYPE_CONTROL_REGISTER:
+			cpu->control_registers[op->reg.index] = *(uint32_t*)value;
+			return 1;
+		case OPERAND_TYPE_DEBUG_REGISTER:
+			cpu->debug_registers[op->reg.index] = *(uint32_t*)value;
+			return 1;
+		case OPERAND_TYPE_TEST_REGISTER:
+			cpu->test_registers[op->reg.index] = *(uint32_t*)value;
+			return 1;
+		default:
+			return 0;
+	}
+}
+#endif
+
 /* Fetch next opcode */
-static void i80286_fetch(I80286* cpu) {
+static int i80386_fetch(I80386* cpu) {
 	cpu->internal_flags = 0;
-	cpu->modrm.u.byte = 0;
-	cpu->segment_prefix = 0xFF;
+	cpu->modrm.byte = 0;
+	cpu->sib.byte = 0;
+	cpu->segment_override = 0xFF;
 	cpu->lock_prefix = 0;
 	cpu->instruction_len = 0;
+	cpu->operand_size = cpu->cs.desc.flags.default_size;
+	cpu->address_size = cpu->cs.desc.flags.default_size;
 	cpu->opcode = 0;
+
+	cpu->effective_address.stack_address = 0;
+	cpu->effective_address.valid = 0;
+	cpu->effective_address.segment_index = 0;
+	cpu->effective_address.base = 0;
+	cpu->effective_address.scale = 0;
+	cpu->effective_address.index = 0;
+	cpu->effective_address.logical_address.offset = 0;
+	cpu->effective_address.logical_address.base = 0;
+	
+	cpu->exception.number = 0;
+	cpu->exception.df_number = 0;
+	cpu->exception.tf_number = 0;
+	cpu->exception.code = 0;
+	cpu->exception.state = I80386_EXCEPTION_STATE_NONE;
 	if (!fetch_byte(cpu, &cpu->opcode)) {
-		return;
+		return 0;
 	}
+	return 1;
 }
 
 /* decode opcode */
-static void i80286_decode_opcode_0f(I80286* cpu) {
-	/* 0x0F XX */
-	if (!fetch_byte(cpu, &cpu->opcode)){
-		return;
-	}
-
-	switch (cpu->opcode) {
-		case 0x00:
-			if (!fetch_modrm(cpu)) {
-				return;
-			}
-
-			switch (cpu->modrm.u.bits.reg) {
-				case 0b000:
-					sldt(cpu);
-					break;
-				case 0b001:
-					str(cpu);
-					break;
-				case 0b010:
-					lldt(cpu);
-					break;
-				case 0b011:
-					ltr(cpu);
-					break;
-				case 0b100:
-					verr(cpu);
-					break;
-				case 0b101:
-					verw(cpu);
-					break;
-			}
-			break;
-
-		case 0x01:
-			if (!fetch_modrm(cpu)) {
-				return;
-			}
-
-			switch (cpu->modrm.u.bits.reg) {
-				case 0b000:
-					sgdt(cpu);
-					break;
-				case 0b001:
-					sidt(cpu);
-					break;
-				case 0b010:
-					lgdt(cpu);
-					break;
-				case 0b011:
-					lidt(cpu);
-					break;
-				case 0b100:
-					smsw(cpu);
-					break;
-				case 0b110:
-					lmsw(cpu);
-					break;
-			}
-			break;
-
-		case 0x02:
-			lar(cpu);
-			break;
-		case 0x03:
-			lsl(cpu);
-			break;
-		case 0x05:
-			loadall(cpu);
-			break;
-		case 0x06:
-			clts(cpu);
-			break;
-	}
-}
-static void i80286_decode_opcode_80(I80286* cpu) {
-	/* 0x80 - 0x83 b100000SW (Immed) */
+static int i80386_decode_opcode_80(I80386* cpu) {
+	/* Immediate Group 1 - (80/81/82/83) b100000SW */
 	if (!fetch_modrm(cpu)) {
-		return;
+		return I80386_DECODE_OK;
 	}
-	switch (cpu->modrm.u.bits.reg) {
-		case 0b000: /* ADD */
+	switch (cpu->modrm.reg) {
+		case 0b000:
 			add_rm_imm(cpu);
 			break;
-		case 0b001: /* OR */
+		case 0b001:
 			or_rm_imm(cpu);
 			break;
-		case 0b010: /* ADC */
+		case 0b010:
 			adc_rm_imm(cpu);
 			break;
-		case 0b011: /* SBB */
+		case 0b011:
 			sbb_rm_imm(cpu);
 			break;
-		case 0b100: /* AND */
+		case 0b100:
 			and_rm_imm(cpu);
 			break;
-		case 0b101: /* SUB */
+		case 0b101:
 			sub_rm_imm(cpu);
 			break;
-		case 0b110: /* XOR */
+		case 0b110:
 			xor_rm_imm(cpu);
 			break;
-		case 0b111: /* CMP */
+		case 0b111:
 			cmp_rm_imm(cpu);
 			break;
 	}
+	return I80386_DECODE_OK;
 }
-static void i80286_decode_opcode_c0(I80286* cpu) {
-	/* 0xC0 - 0xC1 b1100000W (Shift Imm) */
+static int i80386_decode_opcode_c0(I80386* cpu) {
+	/* Shift group 2 E,I - (C0/C1 /r) b1100000W */
 	if (!fetch_modrm(cpu)) {
-		return;
+		return I80386_DECODE_OK;
 	}
-	switch (cpu->modrm.u.bits.reg) {
+	switch (cpu->modrm.reg) {
 		case 0b000:
 			rol_rm_imm(cpu);
 			break;
@@ -3845,49 +6913,51 @@ static void i80286_decode_opcode_c0(I80286* cpu) {
 			sar_rm_imm(cpu);
 			break;
 	}
+	return I80386_DECODE_OK;
 }
-static void i80286_decode_opcode_d0(I80286* cpu) {
-	/* 0xD0 - 0xD3 b110100VW (Shift) */
+static int i80386_decode_opcode_d0(I80386* cpu) {
+	/* Shift group 2 E,1/CL - (D0/D1/D2/D3 /r) b110100VW */
 	if (!fetch_modrm(cpu)) {
-		return;
+		return I80386_DECODE_OK;
 	}
-	switch (cpu->modrm.u.bits.reg) {
+	switch (cpu->modrm.reg) {
 		case 0b000:
-			rol(cpu);
+			rol_rm_cl(cpu);
 			break;
 		case 0b001:
-			ror(cpu);
+			ror_rm_cl(cpu);
 			break;
 		case 0b010:
-			rcl(cpu);
+			rcl_rm_cl(cpu);
 			break;
 		case 0b011:
-			rcr(cpu);
+			rcr_rm_cl(cpu);
 			break;
 		case 0b100:
-			shl(cpu);
+			shl_rm_cl(cpu);
 			break;
 		case 0b101:
-			shr(cpu);
+			shr_rm_cl(cpu);
 			break;
 		case 0b110:
-			sal(cpu);
+			sal_rm_cl(cpu);
 			break;
 		case 0b111:
-			sar(cpu);
+			sar_rm_cl(cpu);
 			break;
 	}
+	return I80386_DECODE_OK;
 }
-static void i80286_decode_opcode_f6(I80286* cpu) {
-	/* F6/F7 b1111011W (Group 1) */
+static int i80386_decode_opcode_f6(I80386* cpu) {
+	/* Unary group 3 - (F6/F7) b1111011W */
 	if (!fetch_modrm(cpu)) {
-		return;
+		return I80386_DECODE_OK;
 	}
-	switch (cpu->modrm.u.bits.reg) {
+	switch (cpu->modrm.reg) {
 		case 0b000:
 			test_rm_imm(cpu);
 			break;
-		case 0b001: /* 8086 undocumented; Decodes identically to b000 */
+		case 0b001: /* todo: is this valid on 80386? */
 			test_rm_imm(cpu);
 			break;
 		case 0b010:
@@ -3897,75 +6967,295 @@ static void i80286_decode_opcode_f6(I80286* cpu) {
 			neg(cpu);
 			break;
 		case 0b100:
-			mul_rm(cpu);
+			mul_accum_rm(cpu);
 			break;
 		case 0b101:
-			imul_rm(cpu);
+			imul_accum_rm(cpu);
 			break;
 		case 0b110:
-			div_rm(cpu);
+			div_accum_rm(cpu);
 			break;
 		case 0b111:
-			idiv_rm(cpu);
+			idiv_accum_rm(cpu);
 			break;
 	}
+	return I80386_DECODE_OK;
 }
-static void i80286_decode_opcode_fe(I80286* cpu) {
-	/* FE/FF b1111111W (Group 2) */
+static int i80386_decode_opcode_fe(I80386* cpu) {
+	/* inc/dec Group 4 - (FE) b11111110 */
 	if (!fetch_modrm(cpu)) {
-		return;
+		return I80386_DECODE_OK;
 	}
-	if (W) {
-		switch (cpu->modrm.u.bits.reg) {
-			case 0b000:
-				inc_rm(cpu);
-				break;
-			case 0b001:
-				dec_rm(cpu);
-				break;
-			case 0b010:
-				call_intra_indirect(cpu);
-				break;
-			case 0b011:
-				call_inter_indirect(cpu);
-				break;
-			case 0b100:
-				jmp_intra_indirect(cpu);
-				break;
-			case 0b101:
-				jmp_inter_indirect(cpu);
-				break;
-			case 0b110:
-				push_rm(cpu);
-				break;
-			case 0b111: /* 8086 undocumented; Decodes identically to b110 */
-				push_rm(cpu);
-				break;
-		}
-	}
-	else {
-		switch (cpu->modrm.u.bits.reg) {
-			case 0b000:
-				inc_rm(cpu);
-				break;
-			case 0b001:
-				dec_rm(cpu);
-				break;
+	switch (cpu->modrm.reg) {
+		case 0b000:
+			inc_rm(cpu);
+			break;
+		case 0b001:
+			dec_rm(cpu);
+			break;
 
-			case 0b010:
-			case 0b011:
-			case 0b100:
-			case 0b101:
-			case 0b110:
-			case 0b111:
-				i80286_exception(cpu, EXCEPTION_UD);
-				break;
-		}
+		case 0b010:
+		case 0b011:
+		case 0b100:
+		case 0b101:
+		case 0b110:
+		case 0b111:
+			i80386_exception(cpu, EXCEPTION_UD);
+			return I80386_DECODE_UNDEFINED;
 	}
-	return;
+	return I80386_DECODE_OK;
 }
+static int i80386_decode_opcode_ff(I80386* cpu) {
+	/* Indirect Group 5 - (FF) b11111111 */
+	if (!fetch_modrm(cpu)) {
+		return I80386_DECODE_OK;
+	}
+	switch (cpu->modrm.reg) {
+		case 0b000:
+			inc_rm(cpu);
+			break;
+		case 0b001:
+			dec_rm(cpu);
+			break;
+		case 0b010:
+			call_intra_indirect(cpu);
+			break;
+		case 0b011:
+			call_inter_indirect(cpu);
+			break;
+		case 0b100:
+			jmp_intra_indirect(cpu);
+			break;
+		case 0b101:
+			jmp_inter_indirect(cpu);
+			break;
+		case 0b110:
+			push_rm(cpu);
+			break;
+		case 0b111: /* todo: is this valid on 80386? */
+			push_rm(cpu);
+			break;
+	}
+	return I80386_DECODE_OK;
+}
+static int i80386_decode_opcode_0f00(I80386* cpu) {
+	/* Group 6 - (0F 00) b00000000 */
+	if (!fetch_modrm(cpu)) {
+		return I80386_DECODE_OK;
+	}
+	switch (cpu->modrm.reg) {
+		case 0b000:
+			sldt(cpu);
+			break;
+		case 0b001:
+			str(cpu);
+			break;
+		case 0b010:
+			lldt(cpu);
+			break;
+		case 0b011:
+			ltr(cpu);
+			break;
+		case 0b100:
+			verr(cpu);
+			break;
+		case 0b101:
+			verw(cpu);
+			break;
+		case 0b110:
+		case 0b111:
+			i80386_exception(cpu, EXCEPTION_UD);
+			return I80386_DECODE_UNDEFINED;
+	}
+	return I80386_DECODE_OK;
+}
+static int i80386_decode_opcode_0f01(I80386* cpu) {
+	/* Group 7 - (0F 01) b00000001 */
+	if (!fetch_modrm(cpu)) {
+		return I80386_DECODE_OK;
+	}
+	switch (cpu->modrm.reg) {
+		case 0b000:
+			sgdt(cpu);
+			break;
+		case 0b001:
+			sidt(cpu);
+			break;
+		case 0b010:
+			lgdt(cpu);
+			break;
+		case 0b011:
+			lidt(cpu);
+			break;
+		case 0b100:
+			smsw(cpu);
+			break;
+		case 0b101:
+			i80386_exception(cpu, EXCEPTION_UD);
+			return I80386_DECODE_UNDEFINED;
+		case 0b110:
+			lmsw(cpu);
+			break;
+		case 0b111:
+			i80386_exception(cpu, EXCEPTION_UD);
+			return I80386_DECODE_UNDEFINED;
+	}
+	return I80386_DECODE_OK;
+}
+static int i80386_decode_opcode_0f(I80386* cpu) {
+	/* 2-byte opcode map - (0F XX) b00001111 */
+	if (!fetch_byte(cpu, &cpu->opcode)) {
+		return I80386_DECODE_OK;
+	}
 
-static int i80286_decode_opcode(I80286* cpu) {
+	switch (cpu->opcode) {
+		case 0x00: /* Group 6 */
+			return i80386_decode_opcode_0f00(cpu);
+		case 0x01: /* Group 7 */
+			return i80386_decode_opcode_0f01(cpu);
+		case 0x02:
+			lar(cpu);
+			break;
+		case 0x03:
+			lsl(cpu);
+			break;
+		case 0x06:
+			clts(cpu);
+			break;
+		case 0x07:
+			loadall(cpu);
+			break;
+
+		case 0x20:
+			mov_cr(cpu);
+			break;
+		case 0x21:
+			mov_dr(cpu);
+			break;
+		case 0x22:
+			mov_cr(cpu);
+			break;
+		case 0x23:
+			mov_dr(cpu);
+			break;
+		case 0x24:
+			mov_tr(cpu);
+			break;
+		case 0x26:
+			mov_tr(cpu);
+			break;
+
+		case 0x80:
+		case 0x81:
+		case 0x82:
+		case 0x83:
+		case 0x84:
+		case 0x85:
+		case 0x86:
+		case 0x87:
+		case 0x88:
+		case 0x89:
+		case 0x8A:
+		case 0x8B:
+		case 0x8C:
+		case 0x8D:
+		case 0x8E:
+		case 0x8F:
+			jcc_long(cpu);
+			break;
+
+		case 0x90:
+		case 0x91:
+		case 0x92:
+		case 0x93:
+		case 0x94:
+		case 0x95:
+		case 0x96:
+		case 0x97:
+		case 0x98:
+		case 0x99:
+		case 0x9A:
+		case 0x9B:
+		case 0x9C:
+		case 0x9D:
+		case 0x9E:
+		case 0x9F:
+			setcc(cpu);
+			break;
+
+		case 0xA0: /* Push FS */
+			push_seg(cpu);
+			break;
+		case 0xA1: /* Pop FS */
+			pop_seg(cpu);
+			break;
+		case 0xA3:
+			bt(cpu);
+			break;
+		case 0xA4:
+			shld_rm_imm(cpu);
+			break;
+		case 0xA5:
+			shld_rm_cl(cpu);
+			break;
+
+		case 0xA8: /* Push GS */
+			push_seg(cpu);
+			break;
+		case 0xA9: /* Pop GS */
+			pop_seg(cpu);
+			break;
+
+		case 0xAB:
+			bts(cpu);
+			break;
+		case 0xAC:
+			shrd_rm_imm(cpu);
+			break;
+		case 0xAD:
+			shrd_rm_cl(cpu);
+			break;
+		case 0xAF:
+			imul_reg_rm(cpu);
+			break;
+
+		case 0xB2:
+			lss(cpu);
+			break;
+		case 0xB3:
+			btr(cpu);
+			break;
+		case 0xB4:
+			lfs(cpu);
+			break;
+		case 0xB5:
+			lgs(cpu);
+			break;
+		case 0xB6:
+		case 0xB7:
+			movzx(cpu);
+			break;
+		case 0xBB:
+			btc(cpu);
+			break;
+		case 0xBC:
+			bsf(cpu);
+			break;
+		case 0xBD:
+			bsr(cpu);
+			break;
+		case 0xBE:
+		case 0xBF:
+			movsx(cpu);
+			break;
+
+		default:
+			i80386_exception(cpu, EXCEPTION_UD);
+			return I80386_DECODE_UNDEFINED;
+	}
+	return I80386_DECODE_OK;
+}
+static int i80386_decode_opcode(I80386* cpu) {
 	switch (cpu->opcode) {
 		case 0x00:
 		case 0x01:
@@ -3997,8 +7287,7 @@ static int i80286_decode_opcode(I80286* cpu) {
 			push_seg(cpu);
 			break;
 		case 0x0F:
-			i80286_decode_opcode_0f(cpu);
-			break;
+			return i80386_decode_opcode_0f(cpu);
 		
 		case 0x10:
 		case 0x11:
@@ -4152,24 +7441,24 @@ static int i80286_decode_opcode(I80286* cpu) {
 			arpl(cpu);
 			break;
 		case 0x64:
-			break;
+			return segment_override_extended(cpu);
 		case 0x65:
-			break;
+			return segment_override_extended(cpu);
 		case 0x66:
-			break;
+			return operand_size(cpu);
 		case 0x67:
-			break;
+			return address_size(cpu);
 		case 0x68:
 			push_imm(cpu);
 			break;
 		case 0x69:
-			imul_rm_imm(cpu);
+			imul_reg_rm_imm(cpu);
 			break;
 		case 0x6A:
 			push_imm(cpu);
 			break;
 		case 0x6B:
-			imul_rm_imm(cpu);
+			imul_reg_rm_imm(cpu);
 			break;
 		case 0x6C:
 		case 0x6D:
@@ -4196,15 +7485,14 @@ static int i80286_decode_opcode(I80286* cpu) {
 		case 0x7D:
 		case 0x7E:
 		case 0x7F:
-			jcc(cpu);
+			jcc_short(cpu);
 			break;
 
 		case 0x80:
 		case 0x81:
 		case 0x82:
 		case 0x83:
-			i80286_decode_opcode_80(cpu);
-			break;
+			return i80386_decode_opcode_80(cpu);
 		case 0x84:
 		case 0x85:
 			test_rm_reg(cpu);
@@ -4321,11 +7609,8 @@ static int i80286_decode_opcode(I80286* cpu) {
 
 		case 0xC0:
 		case 0xC1:
-			i80286_decode_opcode_c0(cpu);
-			break;
+			return i80386_decode_opcode_c0(cpu);
 		case 0xC2:
-			ret_intra_add_imm(cpu);
-			break;
 		case 0xC3:
 			ret_intra(cpu);
 			break;
@@ -4346,8 +7631,6 @@ static int i80286_decode_opcode(I80286* cpu) {
 			leave(cpu);
 			break;
 		case 0xCA:
-			ret_inter_add_imm(cpu);
-			break;
 		case 0xCB:
 			ret_inter(cpu);
 			break;
@@ -4368,15 +7651,14 @@ static int i80286_decode_opcode(I80286* cpu) {
 		case 0xD1:
 		case 0xD2:
 		case 0xD3:
-			i80286_decode_opcode_d0(cpu);
-			break;
+			return i80386_decode_opcode_d0(cpu);
 		case 0xD4:
 			aam(cpu);
 			break;
 		case 0xD5:
 			aad(cpu);
 			break;
-		case 0xD6: /* 80286 undocumented; Set AL to Carry */
+		case 0xD6: /* 8086+ undocumented; Set AL to Carry */
 			salc(cpu);
 			break;
 		case 0xD7:
@@ -4394,8 +7676,6 @@ static int i80286_decode_opcode(I80286* cpu) {
 			break;
 
 		case 0xE0:
-			loopnz(cpu);
-			break;
 		case 0xE1:
 			loopz(cpu);
 			break;
@@ -4435,7 +7715,7 @@ static int i80286_decode_opcode(I80286* cpu) {
 			break;
 
 		case 0xF0:
-		case 0xF1: /* 8086 undocumented; Decodes identically to 0xF0 */
+		case 0xF1: /* 8086 undocumented; Decodes identically to 0xF0. todo: is this valid on 386? */
 			return lock(cpu);
 		case 0xF2:
 		case 0xF3:
@@ -4448,8 +7728,7 @@ static int i80286_decode_opcode(I80286* cpu) {
 			break;
 		case 0xF6:
 		case 0xF7:
-			i80286_decode_opcode_f6(cpu);
-			break;
+			return i80386_decode_opcode_f6(cpu);
 		case 0xF8:
 			clc(cpu);
 			break;
@@ -4469,71 +7748,626 @@ static int i80286_decode_opcode(I80286* cpu) {
 			std(cpu);
 			break;
 		case 0xFE:
+			return i80386_decode_opcode_fe(cpu);
 		case 0xFF:
-			i80286_decode_opcode_fe(cpu);
-			break;
+			return i80386_decode_opcode_ff(cpu);
 	}
-	return I80286_DECODE_OK;
+	return I80386_DECODE_OK;
 }
-
-static int i80286_decode_instruction(I80286* cpu) {
+static int i80386_decode_instruction(I80386* cpu) {
 	int r = 0;
+	if (!i80386_fetch(cpu)) {
+		return 0;
+	}
 	do {
-		r = i80286_decode_opcode(cpu);
-	} while (r == I80286_DECODE_REQ_CYCLE);
+		r = i80386_decode_opcode(cpu);
+	} while (r == I80386_DECODE_REQ_CYCLE);
 	return r;
 }
 
-void i80286_init(I80286* cpu) {
+void i80386_init(I80386* cpu) {
+	cpu->funcs.exe_mem_byte = NULL;
 	cpu->funcs.read_mem_byte = NULL;
 	cpu->funcs.write_mem_byte = NULL;
 	cpu->funcs.read_io_byte = NULL;
 	cpu->funcs.write_io_byte = NULL;
 }
-void i80286_reset(I80286* cpu) {
-	for (int i = 0; i < I80286_REGISTER_COUNT; ++i) {
-		cpu->registers[i].u.r16 = 0;
+void i80386_reset(I80386* cpu) {
+	for (int i = 0; i < I80386_REGISTER_COUNT; ++i) {
+		cpu->general_registers[i].r32 = 0;
+	}
+	for (int i = 0; i < I80386_SEGMENT_COUNT; ++i) {
+		cpu->segment_registers[i].selector = 0x0000;
+		cpu->segment_registers[i].desc.limit = 0x0000FFFF;
+		cpu->segment_registers[i].desc.base = 0x00000000;
+		cpu->segment_registers[i].desc.access.byte = 0;
+		cpu->segment_registers[i].desc.access.rw = 1;
+		cpu->segment_registers[i].desc.access.e = 0;
+		cpu->segment_registers[i].desc.access.p = 1;
+		cpu->segment_registers[i].desc.flags.byte = 0;
+	}
+	for (int i = 0; i < I80386_CONTROL_REGISTER_COUNT; ++i) {
+		cpu->control_registers[i] = 0x00000000;
+	}
+	for (int i = 0; i < I80386_DEBUG_REGISTER_COUNT; ++i) {
+		cpu->debug_registers[i] = 0x00000000;
+	}
+	for (int i = 0; i < I80386_TEST_REGISTER_COUNT; ++i) {
+		cpu->test_registers[i] = 0x00000000;
 	}
 
-	for (int i = 0; i < I80286_SEGMENT_COUNT; ++i) {
-		cpu->segments[i].selector = 0;
-		cpu->segments[i].descriptor.limit = 0xFFFF;
-		cpu->segments[i].descriptor.base = 0x000000;
-	}
+	cpu->idtr.base = 0x00000000;
+	cpu->idtr.limit = 0x000003FF;
 
-	cpu->idtr.base = 0x000000;
-	cpu->idtr.limit = 0x03FF;
+	cpu->gdtr.base = 0x00000000;
+	cpu->gdtr.limit = 0x00000000;
 
-	IP = 0xFFF0;
-	CS = 0xF000;
-	CS_CACHE.base = 0xFF0000;
-	PSW = 0x2;
-	MSW = 0xFFF0;
+	cpu->ldtr.selector = 0x00000000;
+	cpu->ldtr.desc.base = 0x00000000;
+	cpu->ldtr.desc.limit = 0x00000000;
+	cpu->ldtr.desc.access.byte = 0x00;
+	cpu->ldtr.desc.flags.byte = 0x00;
+
+	cpu->eip = 0x0000FFF0;
+	cpu->cs.selector = 0xF000;
+	cpu->cs.desc.base = 0xFFFF0000;
+	cpu->cs.desc.access.e = 1;
+
+	cpu->psw.word = 0x2;
+	cpu->msw.word = 0xFFF0;
 
 	cpu->opcode = 0;
-	cpu->modrm.u.byte = 0;
+	cpu->modrm.byte = 0;
+	cpu->sib.byte = 0;
+	cpu->operand_size = 0;
+	cpu->address_size = 0;
+	cpu->segment_override = 0xFF;
+
 	cpu->cycles = 0;
 	cpu->internal_flags = 0;
-	cpu->segment_prefix = 0xFF;
 	cpu->instruction_len = 0;
 
 	cpu->intr = 0;
 	cpu->nmi = 0;
-		
+
 	cpu->tf_latch = 0;
 	cpu->int_latch = 0;
 	cpu->int_delay = 0;
 	cpu->intr_type = 0;
 	cpu->halt = 0;
+
+	cpu->exception.number = 0;
+	cpu->exception.df_number = 0;
+	cpu->exception.tf_number = 0;
+	cpu->exception.state = 0;
+	cpu->exception.code = 0;
+
+	cpu->effective_address.valid = 0;
+	cpu->effective_address.displacement = 0;
+	cpu->effective_address.base = 0;
+	cpu->effective_address.index = 0;
+	cpu->effective_address.scale = 0;
+	cpu->effective_address.stack_address = 0;
+	cpu->effective_address.segment_index = 0;
+	cpu->effective_address.logical_address.offset = 0;
+	cpu->effective_address.logical_address.base = 0;
+
+	i80386_flush_tlb(cpu);
 }
 
-int i80286_execute(I80286* cpu) {
-	i80286_check_interrupts(cpu);
-	i80286_check_halt(cpu);
-	i80286_fetch(cpu);
-	return i80286_decode_instruction(cpu);
+int i80386_execute(I80386* cpu) {
+	if (cpu->exception.state == I80386_EXCEPTION_STATE_TRIPLE_FAULT) {
+		return I80386_DECODE_TRIPLE_FAULT;
+	}
+	i80386_check_interrupts(cpu);
+	if (!i80386_check_halt(cpu)) {
+		return I80386_DECODE_OK;
+	}
+	return i80386_decode_instruction(cpu);
 }
 
-uint24_t i80286_get_physical_address(uint16_t segment, uint16_t address) {
-	return (((uint24_t)segment << 4) + address) & 0xFFFFFF;
+uint32_t i80386_get_physical_address_bo(uint32_t base, uint32_t offset) {
+	return (base + offset) & 0xFFFFFFFF;
+}
+uint32_t i80386_get_physical_address_so(uint16_t selector, uint32_t offset) {
+	return (((uint32_t)selector << 4) + offset) & 0xFFFFFFFF;
+}
+int i80386_read_descriptor_table_entry(const I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
+	uint8_t rpl = selector & 3U;        /* requestor's privilege level */
+	uint8_t ti = (selector >> 2U) & 1U; /* type */
+	uint16_t index = selector & 0xFFF8; /* entry index */
+
+	uint32_t limit = 0;
+	uint32_t base = 0;
+
+	if (ti) {
+		/* LDT */
+		/* todo: validate current LDTR */
+		limit = cpu->ldtr.desc.limit;
+		base = cpu->ldtr.desc.base;
+	}
+	else {
+		/* GDT */
+		limit = cpu->gdtr.limit;
+		base = cpu->gdtr.base;
+	}
+
+	if (index + 7U > limit) {
+		return 0;
+	}
+
+	read_qword_physical(cpu, base + index, &entry->qword);
+	
+	return 1; /* success */
+}
+int i80386_write_descriptor_table_entry(const I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
+	uint8_t rpl = selector & 3U;        /* requestor's privilege level */
+	uint8_t ti = (selector >> 2U) & 1U; /* type */
+	uint16_t index = selector & 0xFFF8; /* entry index */	
+
+	uint32_t limit = 0;
+	uint32_t base = 0;
+
+	if (ti) {
+		/* LDT */
+		/* todo: validate current LDTR */
+		limit = cpu->ldtr.desc.limit;
+		base = cpu->ldtr.desc.base;
+	}
+	else {
+		/* GDT */
+		limit = cpu->gdtr.limit;
+		base = cpu->gdtr.base;
+	}
+
+	if (index + 7U > limit) {
+		return 0;
+	}
+
+	write_qword_physical(cpu, base + index, entry->qword);
+	
+	return 1; /* success */
+}
+void i80386_update_system_descriptor_cache(const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_DESCRIPTOR_CACHE* cache) {
+	cache->base = (uint32_t)entry->base_lo | (entry->base_mi << 16) | (entry->base_hi << 24);
+	cache->limit = (uint32_t)entry->limit_lo | (entry->flags.limit_hi << 16);
+	cache->access.byte = entry->access.byte;
+	cache->flags.byte = entry->flags.byte;
+}
+void i80386_update_segment_descriptor_cache(const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_DESCRIPTOR_CACHE* cache) {
+	i80386_update_system_descriptor_cache(entry, cache);
+	if (cache->flags.granularity) {
+		cache->limit = (cache->limit << 12) | 0xFFF;
+	}
+}
+int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int sreg_index, uint16_t selector) {
+	int sr_type = 0;
+
+	if (sreg_index < 0 || sreg_index >= I80386_SEGMENT_COUNT) {
+		sr_type = SR_TYPE_SYSTEM;
+	}
+	else {
+		if (sreg_index == SEG_CS) {
+			sr_type = SR_TYPE_CODE;
+		}
+		else if (sreg_index == SEG_SS) {
+			sr_type = SR_TYPE_STACK;
+		}
+		else {
+			sr_type = SR_TYPE_DATA;
+		}
+	}
+	
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		sreg->selector = selector;
+		sreg->desc.base = (uint32_t)selector << 4;
+		sreg->desc.limit = 0x0000FFFF;
+		sreg->desc.access.byte = 0;
+		sreg->desc.flags.byte = 0;
+		return 1;
+	}
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
+		sreg->selector = selector;
+		sreg->desc.base = (uint32_t)selector << 4;
+		sreg->desc.limit = 0x0000FFFF;
+		sreg->desc.access.byte = 0;
+		sreg->desc.flags.byte = 0;
+	}
+	else {
+		/* Protected mode */
+		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+
+		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+			i80386_exception_code(cpu, EXCEPTION_GP, selector);
+			return 0;
+		}
+
+		if (sr_type == SR_TYPE_DATA) {
+			if (!entry.access.p) {
+				i80386_exception_code(cpu, EXCEPTION_NP, selector);
+				return 0;
+			}
+
+			if (!entry.access.s) {
+				i80386_exception_code(cpu, EXCEPTION_GP, selector);
+				return 0;
+			}
+
+			/* Only selectors of executable segments that are readable can be loaded into data segment registers */
+			if (entry.access.e && !entry.access.rw) {
+				i80386_exception(cpu, EXCEPTION_GP);
+				return 0;
+			}
+		}
+		else if (sr_type == SR_TYPE_STACK) {
+			/* SS cannot have a NULL selector */
+			if (selector == 0) {
+				i80386_exception(cpu, EXCEPTION_GP);
+				return 0;
+			}
+
+			if (!entry.access.p) {
+				i80386_exception_code(cpu, EXCEPTION_SS, selector);
+				return 0;
+			}
+
+			if (!entry.access.s) {
+				i80386_exception_code(cpu, EXCEPTION_GP, selector);
+				return 0;
+			}
+
+			/* Only selectors of writable data segments can be loaded into SS */
+			if (entry.access.e || !entry.access.rw) {
+				i80386_exception(cpu, EXCEPTION_GP);
+				return 0;
+			}
+		}
+		else if (sr_type == SR_TYPE_CODE) {
+			/* CS cannot have a NULL selector */
+			if (selector == 0) {
+				i80386_exception(cpu, EXCEPTION_GP);
+				return 0;
+			}
+
+			if (!entry.access.p) {
+				i80386_exception_code(cpu, EXCEPTION_NP, selector);
+				return 0;
+			}
+
+			if (!entry.access.s) {
+				i80386_exception_code(cpu, EXCEPTION_GP, selector);
+				return 0;
+			}
+
+			/* CS Can only be loaded with a selector of an executable segment */
+			if (!entry.access.e) {
+				i80386_exception(cpu, EXCEPTION_GP);
+				return 0;
+			}
+		}
+		else if (sr_type == SR_TYPE_SYSTEM) {
+			if (!entry.access.p) {
+				i80386_exception_code(cpu, EXCEPTION_NP, selector);
+				return 0;
+			}
+
+			if (!entry.access.s) {
+				i80386_exception_code(cpu, EXCEPTION_GP, selector);
+				return 0;
+			}
+		}
+		i80386_update_segment_descriptor_cache(&entry, &sreg->desc);
+		sreg->selector = selector;
+		return 1;
+	}
+
+	return 0;
+}
+void i80386_copy_segment_descriptor(I80386_SEGMENT_REGISTER* dest, const I80386_SEGMENT_REGISTER* src) {
+	dest->selector = src->selector;
+	dest->desc.base = src->desc.base;
+	dest->desc.limit = src->desc.limit;
+	dest->desc.access.byte = src->desc.access.byte;
+	dest->desc.flags.byte = src->desc.flags.byte;
+}
+int i80386_resolve_segment_selector(const I80386* cpu, uint16_t selector, uint32_t* base) {
+	if (cpu->msw.pe && !cpu->eflags.vm) {
+		/* Protected mode */
+		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+		I80386_DESCRIPTOR_CACHE cache = { 0 };
+		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+			return 0;
+		}
+		i80386_update_segment_descriptor_cache(&entry, &cache);
+		*base = cache.base;
+		return 1;
+	}
+	else if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
+		/* Real mode / Virtual 8086 mode */
+		*base = (uint32_t)selector << 4;
+		return 1;
+	}
+	return 0;
+}
+
+int i80386_modrm_get_segment(const I80386* cpu, uint8_t address_size, I80386_MOD_RM modrm, I80386_SIB sib, I80386_EFFECTIVE_ADDRESS* effective_address, uint8_t segment_prefix) {
+	if (segment_prefix != 0xFF) {
+		modrm_set_effective_address_descriptor(cpu, segment_prefix, effective_address);
+		return 1;
+	}
+	else {
+		if (address_size) {
+			uint8_t base_reg = 0;
+			if (modrm.rm == 0b100) {
+				/* SIB */
+				base_reg = sib.base;
+
+				/* mod=00 special case for base=101 -> [disp32] uses DS */
+				if (modrm.mod == 0b00 && base_reg == 0b101) {
+					modrm_set_effective_address_descriptor(cpu, SEG_DS, effective_address);
+					return 1;
+				}
+			}
+			else {
+				base_reg = cpu->modrm.rm;
+			}
+
+			/* mod=00 special case for r/m=101 -> [disp32] uses DS */
+			if (modrm.mod == 0b00 && modrm.rm == 0b101) {
+				modrm_set_effective_address_descriptor(cpu, SEG_DS, effective_address);
+				return 1;
+			}
+			/* SS if base is EBP or ESP */
+			else if (base_reg == REG_EBP || base_reg == REG_ESP) {
+				modrm_set_effective_address_descriptor(cpu, SEG_SS, effective_address);
+				return 1;
+			}
+			else {
+				modrm_set_effective_address_descriptor(cpu, SEG_DS, effective_address);
+				return 1;
+			}
+		}
+		else {
+			/* mod=00 special case for r/m=110 -> [disp16] uses DS */
+			if (modrm.mod == 0b00 && modrm.rm == 0b110) {
+				modrm_set_effective_address_descriptor(cpu, SEG_DS, effective_address);
+				return 1;
+			}
+			else {
+				switch (modrm.rm) {
+				case 0b010: /* [BP+SI] */
+				case 0b011: /* [BP+DI] */
+				case 0b110: /* [BP] (mod != 00) */
+					modrm_set_effective_address_descriptor(cpu, SEG_SS, effective_address);
+					return 1;
+				default:
+					modrm_set_effective_address_descriptor(cpu, SEG_DS, effective_address);
+					return 1;
+				}
+			}
+		}
+	}
+}
+int i80386_modrm_get_offset(const I80386* cpu, uint8_t address_size, I80386_MOD_RM modrm, I80386_SIB sib, I80386_EFFECTIVE_ADDRESS* ea,
+	I80386_FETCH_BYTE fetch_byte, I80386_FETCH_WORD fetch_word, I80386_FETCH_DWORD fetch_dword, void* user_param) {
+	ea->displacement = 0;
+	ea->base = 0;
+	ea->index = 0;
+	ea->scale = 0;
+	ea->logical_address.offset = 0;
+
+	switch (modrm.mod) {
+		case 0b00:
+			if (address_size) {
+				if (modrm.rm == 0b100) {
+					/* [SIB] */
+					if (sib.index == 0b100) {
+						if (sib.base == 0b101) {
+							/* [disp32] */
+							if (!fetch_dword(user_param, &ea->displacement)) {
+								return 0;
+							}
+							ea->logical_address.offset = ea->displacement;
+							return 1;
+						}
+						else {
+	#ifdef _386_SIB_UNDEFINED_
+							/* [base * scale] - scale!=b00 && index=0b100 is undefined on 386 */
+							ea->base = reg32_read(cpu, sib.base);
+							ea->scale = sib.scale;
+							ea->logical_address.offset = ea->base << ea->scale;
+	#else
+							/* [base] */
+							ea->base = reg32_read(cpu, sib.base);
+							ea->logical_address.offset = ea->base;
+	#endif
+							return 1;
+						}
+					}
+					else {
+						if (sib.base == 0b101) {
+							/* [index * scale + disp32] */
+							if (!fetch_dword(user_param, &ea->displacement)) {
+								return 0;
+							}
+							ea->index = reg32_read(cpu, sib.index);
+							ea->scale = sib.scale;
+							ea->logical_address.offset = (ea->index << sib.scale) + (int32_t)ea->displacement;
+							return 1;
+						}
+						else {
+							/* [index * scale + base] */
+							ea->base = reg32_read(cpu, sib.base);
+							ea->index = reg32_read(cpu, sib.index);
+							ea->scale = sib.scale;
+							ea->logical_address.offset = ea->base + (ea->index << ea->scale);
+							return 1;
+						}
+					}
+				}
+				else if (modrm.rm == 0b101) {
+					/* [disp32] */
+					if (!fetch_dword(user_param, &ea->displacement)) {
+						return 0;
+					}
+					ea->logical_address.offset = ea->displacement;
+					return 1;
+				}
+				else {
+					/* [reg32] */
+					ea->logical_address.offset = reg32_read(cpu, modrm.rm);
+					return 1;
+				}
+			}
+			else {
+				if (modrm.rm == 0b110) {
+					/* [disp16] */
+					uint16_t disp16 = 0;
+					if (!fetch_word(user_param, &disp16)) {
+						return 0;
+					}
+					ea->displacement = disp16;
+					ea->logical_address.offset = disp16;
+					return 1;
+				}
+				else {
+					/* [base16] */
+					uint16_t base = modrm_get_base_offset(cpu, modrm);
+					ea->base = base;
+					ea->logical_address.offset = base & 0xFFFF;
+					return 1;
+				}
+			}
+
+		case 0b01: {
+			if (address_size) {
+				if (modrm.rm == 0b100) {
+					/* [SIB + disp8] */
+					if (sib.index == 0b100) {
+	#ifdef _386_SIB_UNDEFINED_
+						/* [base * scale + disp8] - scale!=b00 && index=0b100 is undefined on 386 */
+						uint8_t disp8 = 0;
+						if (!fetch_byte(user_param, &disp8)) {
+							return 0;
+						}
+						ea->base = reg32_read(cpu, sib.base);
+						ea->scale = sib.scale;
+						ea->displacement = disp8;
+						ea->logical_address.offset = (ea->base << ea->scale) + (int8_t)disp8;
+	#else
+						/* [base + disp8] */
+						uint8_t disp8 = 0;
+						if (!fetch_byte(user_param, &disp8)) {
+							return 0;
+						}
+						ea->base = reg32_read(cpu, sib.base);
+						ea->displacement = disp8;
+						ea->logical_address.offset = ea->base + (int8_t)disp8;
+	#endif
+						return 1;
+					}
+					else {
+						/* [base + index * scale + disp8] */
+						uint8_t disp8 = 0;
+						if (!fetch_byte(user_param, &disp8)) {
+							return 0;
+						}
+						ea->base = reg32_read(cpu, sib.base);
+						ea->index = reg32_read(cpu, sib.index);
+						ea->scale = sib.scale;
+						ea->displacement = disp8;
+						ea->logical_address.offset = ea->base + (ea->index << ea->scale) + (int8_t)disp8;
+						return 1;
+					}
+				}
+				else {
+					/* [reg32 + disp8] */
+					uint8_t disp8 = 0;
+					if (!fetch_byte(user_param, &disp8)) {
+						return 0;
+					}
+					ea->base = reg32_read(cpu, modrm.rm);
+					ea->displacement = disp8;
+					ea->logical_address.offset = (ea->base + (int8_t)disp8) & 0xFFFFFFFF;
+					return 1;
+				}
+			}
+			else {
+				/* [base16 + disp8] */
+				uint8_t disp8 = 0;
+				if (!fetch_byte(user_param, &disp8)) {
+					return 0;
+				}
+				ea->base = modrm_get_base_offset(cpu, modrm);
+				ea->displacement = disp8;
+				ea->logical_address.offset = (ea->base + (int8_t)disp8) & 0xFFFF;
+				return 1;
+			}
+		}
+
+		case 0b10: {
+			if (address_size) {
+				if (modrm.rm == 0b100) {
+					/* [SIB + disp32] */
+					if (sib.index == 0b100) {
+	#ifdef _386_SIB_UNDEFINED_
+						/* [base * scale + disp32] - scale!=b00 && index=0b100 is undefined on 386 */
+						if (!fetch_dword(user_param, &ea->displacement)) {
+							return 0;
+						}
+						ea->base = reg32_read(cpu, sib.base);
+						ea->scale = sib.scale;
+						ea->logical_address.offset = (ea->base << ea->scale) + (int32_t)ea->displacement;
+	#else
+						/* [base + disp32] */
+						if (!fetch_dword(user_param, &ea->displacement)) {
+							return 0;
+						}
+						ea->base = reg32_read(cpu, sib.base);
+						ea->logical_address.offset = ea->base + (int32_t)ea->displacement;
+	#endif
+						return 1;
+					}
+					else {
+						/* [index * scale + base + disp32] */
+						if (!fetch_dword(user_param, &ea->displacement)) {
+							return 0;
+						}
+						ea->base = reg32_read(cpu, sib.base);
+						ea->index = reg32_read(cpu, sib.index);
+						ea->scale = sib.scale;
+						ea->logical_address.offset = (ea->index << ea->scale) + ea->base + (int32_t)ea->displacement;
+						return 1;
+					}
+				}
+				else {
+					/* [reg32 + disp32] */
+					if (!fetch_dword(user_param, (uint32_t*)&ea->displacement)) {
+						return 0;
+					}
+					ea->base = reg32_read(cpu, modrm.rm);
+					ea->logical_address.offset = (ea->base + (int32_t)ea->displacement) & 0xFFFFFFFF;
+					return 1;
+				}
+			}
+			else {
+				/* [base16 + disp16] */
+				uint16_t disp16 = 0;
+				if (!fetch_word(user_param, &disp16)) {
+					return 0;
+				}
+				ea->displacement = disp16;
+				ea->base = modrm_get_base_offset(cpu, modrm);
+				ea->logical_address.offset = (ea->base + (int16_t)disp16) & 0xFFFF;
+				return 1;
+			}
+		}
+
+		/* case 0b11: register mode SHOULD never calls this */
+		case 0b11:
+		default:
+			return 0;
+	}
 }
