@@ -332,30 +332,16 @@ typedef struct I80386_SIB {
 	};
 } I80386_SIB;
 
-typedef struct I80386_DESCRIPTOR_ACCESS {
+#pragma pack(push, 1)
+typedef struct I80386_DESCRIPTOR_ACCESS_RIGHTS {
 	union {
-		uint8_t byte;
+		uint16_t word;
 		union {
 			struct {
-				uint8_t type : 4; /* type */				
-				uint8_t s    : 1; /* 0 = system segment; 1 = code/data segment */	
-				uint8_t dpl  : 2; /* descriptor privilege level */
-				uint8_t p    : 1; /* present bit */
-			};
-			struct {
-				uint8_t a   : 1; /* accessed bit */
-				uint8_t rw  : 1; /* readable/writable */
-				uint8_t dc  : 1; /* expand-down/comforming */
-				uint8_t e   : 1; /* 0 = data segment; 1 = code segment */
-			};
-		};
-	};
-} I80386_DESCRIPTOR_ACCESS;
-
-typedef struct I80386_DESCRIPTOR_FLAGS {
-	union {
-		uint8_t byte;
-		struct {
+				uint8_t type         : 4; /* type */				
+				uint8_t s            : 1; /* 0 = system segment; 1 = code/data segment */	
+				uint8_t dpl          : 2; /* descriptor privilege level */
+				uint8_t present      : 1; /* present bit */
 			uint8_t limit_hi     : 4; /* limit. bits 16-19 */
 			uint8_t available    : 1; /* available for programmers use */
 			uint8_t zero         : 1;
@@ -364,17 +350,28 @@ typedef struct I80386_DESCRIPTOR_FLAGS {
 			                             limit is interpreted in 1-byte units; when set, the limit is interpreted in 4-kilobyte units. */
 		};
 		struct {
-			uint8_t r0           : 1; /* limit. bit 16 */
-			uint8_t r1           : 1; /* limit. bit 17 */
-			uint8_t r2           : 1; /* limit. bit 18 */
-			uint8_t r3           : 1; /* limit. bit 19 */
-			uint8_t r4           : 1; /* available for programmers use */
-			uint8_t r5           : 1;
-			uint8_t big          : 1; /* only applies to data segment */
-			uint8_t r7           : 1; /* granularity bit */
+				uint8_t accessed : 1; /* accessed bit */
+				uint8_t rw       : 1; /* readable/writable */
+				uint8_t dc       : 1; /* expand-down/comforming */
+				uint8_t e        : 1; /* 0 = data segment; 1 = code segment */
+				uint8_t b4       : 1;
+				uint8_t b5       : 1;
+				uint8_t b6       : 1;
+				uint8_t b7       : 1;
+
+				uint8_t b8       : 1;
+				uint8_t b9       : 1;
+				uint8_t b10      : 1;
+				uint8_t b11      : 1;
+				uint8_t b12      : 1;
+				uint8_t b13      : 1;
+				uint8_t big      : 1; /* only applies to data segment */
+				uint8_t b15      : 1;
+			};
 		};
 	};
-} I80386_DESCRIPTOR_FLAGS;
+} I80386_DESCRIPTOR_ACCESS_RIGHTS;
+#pragma pack(pop)
 
 typedef struct I80386_DESCRIPTOR_TABLE_ENTRY {
 	union {
@@ -384,8 +381,7 @@ typedef struct I80386_DESCRIPTOR_TABLE_ENTRY {
 			uint16_t limit_lo; /* segment limit. bits 0-15 */
 			uint16_t base_lo;  /* segment base. bits 0-15 */
 			uint8_t base_mi;   /* segment base. bits 16-23 */
-			I80386_DESCRIPTOR_ACCESS access;
-			I80386_DESCRIPTOR_FLAGS flags;
+			I80386_DESCRIPTOR_ACCESS_RIGHTS ar;
 			uint8_t base_hi;   /* segment base. bits 24-31 */
 		};
 	};
@@ -397,8 +393,7 @@ typedef struct I80386_DESCRIPTOR_TABLE_REGISTER {
 } I80386_DESCRIPTOR_TABLE_REGISTER;
 
 typedef struct I80386_DESCRIPTOR_CACHE {	
-	I80386_DESCRIPTOR_ACCESS access;
-	I80386_DESCRIPTOR_FLAGS flags;
+	I80386_DESCRIPTOR_ACCESS_RIGHTS ar;
 	uint32_t base;                  /* base */
 	uint32_t limit;                 /* limit */
 } I80386_DESCRIPTOR_CACHE;

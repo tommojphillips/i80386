@@ -3310,8 +3310,7 @@ static void i80386_next(I80386_MNEM* mnem, const I80386_SEGMENT_REGISTER* sdescr
 	mnem->sdescriptor.selector = sdescriptor->selector;
 	mnem->sdescriptor.desc.base = sdescriptor->desc.base;
 	mnem->sdescriptor.desc.limit = sdescriptor->desc.limit;
-	mnem->sdescriptor.desc.access = sdescriptor->desc.access;
-	mnem->sdescriptor.desc.flags = sdescriptor->desc.flags;
+	mnem->sdescriptor.desc.ar.word = sdescriptor->desc.ar.word;
 
 	mnem->offset32 = offset;
 	mnem->counter = 0;
@@ -3334,8 +3333,8 @@ static void i80386_next(I80386_MNEM* mnem, const I80386_SEGMENT_REGISTER* sdescr
 	mnem->step_over_address.base = 0;
 	mnem->step_over_address.offset = 0;
 
-	mnem->operand_size = mnem->sdescriptor.desc.flags.default_size;
-	mnem->addressing_size = mnem->sdescriptor.desc.flags.default_size;
+	mnem->operand_size = mnem->sdescriptor.desc.ar.default_size;
+	mnem->addressing_size = mnem->sdescriptor.desc.ar.default_size;
 
 	mnem->effective_address.stack_address = 0;
 	mnem->effective_address.valid = 0;
@@ -4258,8 +4257,7 @@ int i80386_mnem_at_bo(I80386_MNEM* mnem, uint32_t base, uint32_t offset) {
 		.selector = (base >> 4) & 0xFFFF,
 		.desc.base = base,
 		.desc.limit = mnem->state->cs.desc.limit,
-		.desc.access.byte = mnem->state->cs.desc.access.byte,
-		.desc.flags.byte = mnem->state->cs.desc.flags.byte,
+		.desc.ar.word = mnem->state->cs.desc.ar.word
 	};
 	i80386_fetch(mnem, &sdescriptor, offset);
 	return i80386_decode_instruction(mnem);
@@ -4270,8 +4268,7 @@ int i80386_mnem_at_so(I80386_MNEM* mnem, uint16_t selector, uint32_t offset) {
 		.selector = selector,
 		.desc.base = selector << 4,
 		.desc.limit = mnem->state->cs.desc.limit,
-		.desc.access.byte = mnem->state->cs.desc.access.byte,
-		.desc.flags.byte = mnem->state->cs.desc.flags.byte,
+		.desc.ar.word = mnem->state->cs.desc.ar.word
 	};
 	i80386_fetch(mnem, &sdescriptor, offset);
 	return i80386_decode_instruction(mnem);

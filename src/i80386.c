@@ -128,7 +128,7 @@ static int segment_read_check(I80386* cpu, uint8_t sreg_index, uint32_t offset, 
 	if (offset > cpu->segment_registers[sreg_index].desc.limit - (size - 1)) {
 		return 0;
 	}
-	if (cpu->segment_registers[sreg_index].desc.access.e && !cpu->segment_registers[sreg_index].desc.access.rw) {
+	if (cpu->segment_registers[sreg_index].desc.ar.e && !cpu->segment_registers[sreg_index].desc.ar.rw) {
 		return 0;
 	}
 	return 1;
@@ -137,7 +137,7 @@ static int segment_write_check(I80386* cpu, uint8_t sreg_index, uint32_t offset,
 	if (offset > cpu->segment_registers[sreg_index].desc.limit - (size - 1)) {
 		return 0;
 	}
-	if (cpu->segment_registers[sreg_index].desc.access.e || !cpu->segment_registers[sreg_index].desc.access.rw) {
+	if (cpu->segment_registers[sreg_index].desc.ar.e || !cpu->segment_registers[sreg_index].desc.ar.rw) {
 		return 0;
 	}
 	return 1;
@@ -1964,7 +1964,7 @@ static int i80386_task_store_to_tss_image(const I80386* cpu, I80386_TASK_STATE_S
 	return 1;
 }
 static int i80386_task_read_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80386_TASK_STATE_SEGMENT* tss) {
-	if (!cache->access.p) {
+	if (!cache->ar.present) {
 		i80386_exception_code(cpu, EXCEPTION_NP, 0);
 		return 0;
 	}
@@ -1981,7 +1981,7 @@ static int i80386_task_read_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80
 	return 1;
 }
 static int i80386_task_write_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80386_TASK_STATE_SEGMENT* tss) {
-	if (!cache->access.p) {
+	if (!cache->ar.present) {
 		i80386_exception_code(cpu, EXCEPTION_NP, 0);
 		return 0;
 	}
@@ -1998,19 +1998,19 @@ static int i80386_task_write_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I8
 	return 1;
 }
 static void i80386_task_set_busy(I80386_DESCRIPTOR_TABLE_ENTRY* desc) {
-	if (desc->access.type == I80386_GATE_TYPE_AVAL_286) {
-		desc->access.type = I80386_GATE_TYPE_BUSY_286;
+	if (desc->ar.type == I80386_GATE_TYPE_AVAL_286) {
+		desc->ar.type = I80386_GATE_TYPE_BUSY_286;
 	}
-	else if (desc->access.type == I80386_GATE_TYPE_AVAL_386) {
-		desc->access.type = I80386_GATE_TYPE_BUSY_386;
+	else if (desc->ar.type == I80386_GATE_TYPE_AVAL_386) {
+		desc->ar.type = I80386_GATE_TYPE_BUSY_386;
 	}
 }
 static void i80386_task_clear_busy(I80386_DESCRIPTOR_TABLE_ENTRY* desc) {
-	if (desc->access.type == I80386_GATE_TYPE_BUSY_286) {
-		desc->access.type = I80386_GATE_TYPE_AVAL_286;
+	if (desc->ar.type == I80386_GATE_TYPE_BUSY_286) {
+		desc->ar.type = I80386_GATE_TYPE_AVAL_286;
 	}
-	else if (desc->access.type == I80386_GATE_TYPE_BUSY_386) {
-		desc->access.type = I80386_GATE_TYPE_AVAL_386;
+	else if (desc->ar.type == I80386_GATE_TYPE_BUSY_386) {
+		desc->ar.type = I80386_GATE_TYPE_AVAL_386;
 	}
 }
 static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH_REASON reason) {
@@ -3724,8 +3724,8 @@ static void jmp_inter_direct(I80386* cpu) {
 			return;
 		}
 
-		if (entry.access.s) {
-			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)){
+		if (entry.ar.s) {
+			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
 				return;
 			}
 			cpu->eip = offset;
@@ -3805,7 +3805,7 @@ static void jmp_inter_indirect(I80386* cpu) {
 			return;
 		}
 
-		if (entry.access.s) {
+		if (entry.ar.s) {
 			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
 				return;
 			}
@@ -3943,8 +3943,8 @@ static void call_inter_direct(I80386* cpu) {
 			return;
 		}
 
-		if (entry.access.s) {
-			if (!entry.access.e) {
+		if (entry.ar.s) {
+			if (!entry.ar.e) {
 				i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return;
 			}
@@ -3967,7 +3967,7 @@ static void call_inter_direct(I80386* cpu) {
 			cpu->eip = offset;
 		}
 		else {
-			switch (entry.access.type) {
+			switch (entry.ar.type) {
 				case I80386_GATE_TYPE_CALL_286:
 				case I80386_GATE_TYPE_CALL_386:
 					if (!i80386_call_gate(cpu, selector, &entry)) {
@@ -4084,7 +4084,7 @@ static void call_inter_indirect(I80386* cpu) {
 			return;
 		}
 
-		if (entry.access.s) {
+		if (entry.ar.s) {
 			if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
 				return;
 			}
@@ -4113,7 +4113,7 @@ static void call_inter_indirect(I80386* cpu) {
 		}
 		else {
 			I80386_GATE gate = { 0 };
-			switch (entry.access.type) {
+			switch (entry.ar.type) {
 				case I80386_GATE_TYPE_CALL_286:
 				case I80386_GATE_TYPE_CALL_386:
 					if (!i80386_call_gate(cpu, selector, &entry)) {
@@ -4134,10 +4134,10 @@ static void call_inter_indirect(I80386* cpu) {
 				return;
 			}
 
-			if (entry.access.type == I80386_GATE_TYPE_CALL_286) {
+			if (entry.ar.type == I80386_GATE_TYPE_CALL_286) {
 				cpu->eip = gate.offset_lo; /* clear upper 16bits */
 			}
-			else if (entry.access.type == I80386_GATE_TYPE_CALL_386) {
+			else if (entry.ar.type == I80386_GATE_TYPE_CALL_386) {
 				cpu->eip = gate.offset_lo | gate.offset_hi << 16;
 			}
 		}
@@ -5916,12 +5916,12 @@ static void lar(I80386* cpu) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
-	if (descriptor.access.dpl < cpu->cpl) {
+	if (descriptor.ar.dpl < cpu->cpl) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
 
-	modrm_write_reg16(cpu, descriptor.access.byte);
+	modrm_write_reg16(cpu, descriptor.ar.word);
 	cpu->psw.zf = 1; /* ZF=1 indicates success */
 }
 static void lsl(I80386* cpu) {
@@ -5955,7 +5955,7 @@ static void lsl(I80386* cpu) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
-	if (descriptor.access.dpl < cpu->cpl) {
+	if (descriptor.ar.dpl < cpu->cpl) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
@@ -6023,7 +6023,7 @@ static void loadall_sreg(I80386* cpu, uint32_t base, uint32_t offset, I80386_SEG
 	read_word_logical(cpu, base, offset + 0, &sreg->selector);
 }
 static void loadall_desc(I80386* cpu, uint32_t base, uint32_t offset, I80386_DESCRIPTOR_CACHE* descriptor) {
-	read_byte_physical(cpu, base + offset + 0, &descriptor->access.byte);
+	read_word_physical(cpu, base + offset + 0, &descriptor->ar.word);
 	read_dword_physical(cpu, base + offset + 4, &descriptor->base);
 	read_dword_physical(cpu, base + offset + 8, &descriptor->limit);
 }
@@ -6116,37 +6116,37 @@ static void loadall(I80386* cpu) {
 	cpu->ldtr.selector = buffer.ldt_selector & 0xFFFF;
 	cpu->ldtr.desc.base = buffer.ldt.address;
 	cpu->ldtr.desc.limit = buffer.ldt.limit;
-	cpu->ldtr.desc.access.byte = buffer.ldt.ar & 0xFF;
+	cpu->ldtr.desc.ar.word = buffer.ldt.ar & 0xFFFF;
 
 	cpu->gs.selector = buffer.gs_selector & 0xFFFF;
 	cpu->gs.desc.base = buffer.gs.address;
 	cpu->gs.desc.limit = buffer.gs.limit;
-	cpu->gs.desc.access.byte = buffer.gs.ar & 0xFF;
+	cpu->gs.desc.ar.word = buffer.gs.ar & 0xFFFF;
 
 	cpu->fs.selector = buffer.fs_selector & 0xFFFF;
 	cpu->fs.desc.base = buffer.fs.address;
 	cpu->fs.desc.limit = buffer.fs.limit;
-	cpu->fs.desc.access.byte = buffer.fs.ar & 0xFF;
+	cpu->fs.desc.ar.word = buffer.fs.ar & 0xFFFF;
 
 	cpu->ds.selector = buffer.ds_selector & 0xFFFF;
 	cpu->ds.desc.base = buffer.ds.address;
 	cpu->ds.desc.limit = buffer.ds.limit;
-	cpu->ds.desc.access.byte = buffer.ds.ar & 0xFF;
+	cpu->ds.desc.ar.word = buffer.ds.ar & 0xFFFF;
 
 	cpu->ss.selector = buffer.ss_selector & 0xFFFF;
 	cpu->ss.desc.base = buffer.ss.address;
 	cpu->ss.desc.limit = buffer.ss.limit;
-	cpu->ss.desc.access.byte = buffer.ss.ar & 0xFF;
+	cpu->ss.desc.ar.word = buffer.ss.ar & 0xFFFF;
 
 	cpu->cs.selector = buffer.cs_selector & 0xFFFF;
 	cpu->cs.desc.base = buffer.cs.address;
 	cpu->cs.desc.limit = buffer.cs.limit;
-	cpu->cs.desc.access.byte = buffer.cs.ar & 0xFF;
+	cpu->cs.desc.ar.word = buffer.cs.ar & 0xFFFF;
 
 	cpu->es.selector = buffer.es_selector & 0xFFFF;
 	cpu->es.desc.base = buffer.es.address;
 	cpu->es.desc.limit = buffer.es.limit;
-	cpu->es.desc.access.byte = buffer.es.ar & 0xFF;
+	cpu->es.desc.ar.word = buffer.es.ar & 0xFFFF;
 }
 
 static void setcc(I80386* cpu) {
@@ -6544,8 +6544,8 @@ static int i80386_fetch(I80386* cpu) {
 	cpu->segment_override = 0xFF;
 	cpu->lock_prefix = 0;
 	cpu->instruction_len = 0;
-	cpu->operand_size = cpu->cs.desc.flags.default_size;
-	cpu->address_size = cpu->cs.desc.flags.default_size;
+	cpu->operand_size = cpu->cs.desc.ar.default_size;
+	cpu->address_size = cpu->cs.desc.ar.default_size;
 	cpu->opcode = 0;
 
 	cpu->effective_address.stack_address = 0;
@@ -7500,11 +7500,9 @@ void i80386_reset(I80386* cpu) {
 		cpu->segment_registers[i].selector = 0x0000;
 		cpu->segment_registers[i].desc.limit = 0x0000FFFF;
 		cpu->segment_registers[i].desc.base = 0x00000000;
-		cpu->segment_registers[i].desc.access.byte = 0;
-		cpu->segment_registers[i].desc.access.rw = 1;
-		cpu->segment_registers[i].desc.access.e = 0;
-		cpu->segment_registers[i].desc.access.p = 1;
-		cpu->segment_registers[i].desc.flags.byte = 0;
+		cpu->segment_registers[i].desc.ar.word = 0;
+		cpu->segment_registers[i].desc.ar.rw = 1;
+		cpu->segment_registers[i].desc.ar.present = 1;
 	}
 	for (int i = 0; i < I80386_CONTROL_REGISTER_COUNT; ++i) {
 		cpu->control_registers[i] = 0x00000000;
@@ -7525,13 +7523,12 @@ void i80386_reset(I80386* cpu) {
 	cpu->ldtr.selector = 0x00000000;
 	cpu->ldtr.desc.base = 0x00000000;
 	cpu->ldtr.desc.limit = 0x00000000;
-	cpu->ldtr.desc.access.byte = 0x00;
-	cpu->ldtr.desc.flags.byte = 0x00;
+	cpu->ldtr.desc.ar.word = 0x0000;
 
 	cpu->eip = 0x0000FFF0;
 	cpu->cs.selector = 0xF000;
 	cpu->cs.desc.base = 0xFFFF0000;
-	cpu->cs.desc.access.e = 1;
+	cpu->cs.desc.ar.e = 1;
 
 	cpu->psw.word = 0x2;
 	cpu->msw.word = 0xFFF0;
@@ -7650,13 +7647,12 @@ int i80386_write_descriptor_table_entry(const I80386* cpu, uint16_t selector, co
 }
 void i80386_update_system_descriptor_cache(const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_DESCRIPTOR_CACHE* cache) {
 	cache->base = (uint32_t)entry->base_lo | (entry->base_mi << 16) | (entry->base_hi << 24);
-	cache->limit = (uint32_t)entry->limit_lo | (entry->flags.limit_hi << 16);
-	cache->access.byte = entry->access.byte;
-	cache->flags.byte = entry->flags.byte;
+	cache->limit = (uint32_t)entry->limit_lo | (entry->ar.limit_hi << 16);
+	cache->ar.word = entry->ar.word;
 }
 void i80386_update_segment_descriptor_cache(const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_DESCRIPTOR_CACHE* cache) {
 	i80386_update_system_descriptor_cache(entry, cache);
-	if (cache->flags.granularity) {
+	if (cache->ar.granularity) {
 		cache->limit = (cache->limit << 12) | 0xFFF;
 	}
 }
@@ -7789,8 +7785,7 @@ void i80386_copy_segment_descriptor(I80386_SEGMENT_REGISTER* dest, const I80386_
 	dest->selector = src->selector;
 	dest->desc.base = src->desc.base;
 	dest->desc.limit = src->desc.limit;
-	dest->desc.access.byte = src->desc.access.byte;
-	dest->desc.flags.byte = src->desc.flags.byte;
+	dest->desc.ar.word = src->desc.ar.word;
 }
 int i80386_resolve_segment_selector(const I80386* cpu, uint16_t selector, uint32_t* base) {
 	if (cpu->msw.pe && !cpu->eflags.vm) {
