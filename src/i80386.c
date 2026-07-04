@@ -1253,6 +1253,89 @@ static int exec_bin_bit_test(I80386* cpu, I80386_ALU16_FUNC op16, I80386_ALU32_F
 	}
 	return 1;
 }
+static int exec_bin_bit_search(I80386* cpu, int r) {
+	/* bit search forward/reverse - Ev,Gv */
+	I80386_OPERAND rm = { 0 };
+
+	/* lock raises #UD */
+	if (cpu->lock_prefix) {
+		i80386_exception(cpu, EXCEPTION_UD);
+		return 0;
+	}
+
+	if (!fetch_modrm(cpu)) {
+		return 0;
+	}
+	if (!modrm_get_rm(cpu, &rm)) {
+		return 0;
+	}
+
+	if (cpu->operand_size) {
+		uint32_t src;
+
+		if (!modrm_read_rm32(cpu, &rm, &src)) {
+			return 0;
+		}
+
+		/* check if destination is undefined */
+		if (src == 0) {
+			cpu->psw.zf = 1;
+			return 0;
+		}
+
+		cpu->psw.zf = 0;
+
+		if (r) {
+			for (uint32_t bit = 31; bit >= 1; --bit) {
+				if (src & (1U << bit)) {
+					modrm_write_reg32(cpu, bit);
+					break;
+				}
+			}
+		}
+		else {
+			for (uint32_t bit = 0; bit < 32; ++bit) {
+				if (src & (1U << bit)) {
+					modrm_write_reg32(cpu, bit);
+					break;
+				}
+			}
+		}
+	}
+	else {
+		uint16_t src;
+
+		if (!modrm_read_rm16(cpu, &rm, &src)) {
+			return 0;
+		}
+
+		/* check if destination is undefined */
+		if (src == 0) {
+			cpu->psw.zf = 1;
+			return 0;
+		}
+
+		cpu->psw.zf = 0;
+
+		if (r) {
+			for (uint16_t bit = 15; bit >= 1; --bit) {
+				if (src & (1U << bit)) {
+					modrm_write_reg16(cpu, bit);
+					break;
+				}
+			}
+		}
+		else {
+			for (uint16_t bit = 0; bit < 16; ++bit) {
+				if (src & (1U << bit)) {
+					modrm_write_reg16(cpu, bit);
+					break;
+				}
+			}
+		}
+	}
+	return 1;
+}
 static int exec_bin_rm_reg(I80386* cpu, I80386_ALU8_FUNC op8, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32, int wb) {
 	if (!fetch_modrm(cpu)) {
 		return 0;
@@ -6105,128 +6188,12 @@ static void btc(I80386* cpu) {
 }
 static void bsf(I80386* cpu) {
 	/* bit search forward - bsf Ev,Gv - (0F BC) b10111100 */
-	I80386_OPERAND rm = { 0 };
-
-	/* lock raises #UD */
-	if (cpu->lock_prefix) {
-		i80386_exception(cpu, EXCEPTION_UD);
-		return;
-	}
-
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (!modrm_get_rm(cpu, &rm)) {
-		return;
-	}
-
-	if (cpu->operand_size) {
-		uint32_t src;
-
-		if (!modrm_read_rm32(cpu, &rm, &src)) {
-			return;
-		}
-
-		/* check if destination is undefined */
-		if (src == 0) {
-			cpu->psw.zf = 1;
-			return;
-		}
-
-		cpu->psw.zf = 0;
-
-		for (int bit = 0; bit < 32; ++bit) {
-			if (src & (1U << bit)) {
-				modrm_write_reg32(cpu, bit);
-				return;
-			}
-		}
-	}
-	else {
-		uint16_t src;
-
-		if (!modrm_read_rm16(cpu, &rm, &src)) {
-			return;
-		}
-		
-		/* check if destination is undefined */
-		if (src == 0) {
-			cpu->psw.zf = 1;
-			return;
-		}
-
-		cpu->psw.zf = 0;
-
-		for (uint16_t bit = 0; bit < 16; ++bit) {
-			if (src & (1U << bit)) {
-				modrm_write_reg16(cpu, bit);
-				return;
-			}
-		}
-	}
+	exec_bin_bit_search(cpu, 0);
 }
 static void bsr(I80386* cpu) {
 	/* bit search reverse - bsr Ev,Gv - (0F BD) b10111101 */
-	I80386_OPERAND rm = { 0 };
-
-	/* lock raises #UD */
-	if (cpu->lock_prefix) {
-		i80386_exception(cpu, EXCEPTION_UD);
-		return;
+	exec_bin_bit_search(cpu, 1);
 	}
-
-	if (!fetch_modrm(cpu)) {
-		return;
-	}
-	if (!modrm_get_rm(cpu, &rm)) {
-		return;
-	}
-
-	if (cpu->operand_size) {
-		uint32_t src;
-		if (!modrm_read_rm32(cpu, &rm, &src)) {
-			return;
-		}
-
-		/* check if destination is undefined */
-		if (src == 0) {
-			cpu->psw.zf = 1;
-			return;
-		}
-
-		cpu->psw.zf = 0;
-
-		for (uint32_t bit = 31; bit >= 1; --bit) {
-			if (src & (1U << bit)) {
-				modrm_write_reg32(cpu, bit);
-				return;
-			}
-		}
-		modrm_write_reg32(cpu, 0);
-	}
-	else {
-		uint16_t src;
-		if (!modrm_read_rm16(cpu, &rm, &src)) {
-			return;
-		}
-
-		/* check if destination is undefined */
-		if (src == 0) {
-			cpu->psw.zf = 1;
-			return;
-		}
-
-		cpu->psw.zf = 0;
-
-		for (uint16_t bit = 15; bit >= 1; --bit) {
-			if (src & (1U << bit)) {
-				modrm_write_reg16(cpu, bit);
-				return;
-			}
-		}
-		modrm_write_reg16(cpu, 0);
-	}
-}
 
 /* prefix byte */
 static int rep(I80386* cpu) {
