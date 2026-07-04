@@ -6248,80 +6248,81 @@ static int address_size(I80386* cpu) {
 #if 0
 /* operand get/set proto */
 typedef enum {
-	AM_NONE,
-	AM_A, /* Direct address; operand is encoded in the instruction */
-	AM_C, /* The reg field of ModR/M byte selects a control register */
-	AM_D, /* The reg field of ModR/M byte selects a debug register */
-	AM_E, /* A ModR/M byte follows the opcode and specifies the operand */
-	AM_F, /* Eflags */
-	AM_G, /* The reg field of ModR/M byte selects a general register */
-	AM_I, /* Immediate data; operand is encoded in the instruction */
-	AM_J, /* The instruction contains a relative offset */
-	AM_M, /* The ModR/M byte may ONLY refer to memory */
-	AM_O, /* The instruction has no ModR/M byte. The offset of the operand is encoded asa word/dword in the instruction */
-	AM_R, /* The reg field of ModR/M byte may ONLY select a general register */
-	AM_S, /* The reg field of ModR/M byte selects a segment register */
-	AM_T, /* The reg field of ModR/M byte selects a test register */
-	AM_X, /* Memory addressed by DS:SI */
-	AM_Y, /* Memory addressed by ES:DI */
+	AM_NONE = 0,
+	AM_A    = (1 << 8),  /* Direct address; operand is encoded in the instruction */
+	AM_C    = (2 << 8),  /* The reg field of ModR/M byte selects a control register */
+	AM_D    = (3 << 8),  /* The reg field of ModR/M byte selects a debug register */
+	AM_E    = (4 << 8),  /* A ModR/M byte follows the opcode and specifies the operand */
+	AM_F    = (5 << 8),  /* Eflags */
+	AM_G    = (6 << 8),  /* The reg field of ModR/M byte selects a general register */
+	AM_I    = (7 << 8),  /* Immediate data; operand is encoded in the instruction */
+	AM_J    = (8 << 8),  /* The instruction contains a relative offset */
+	AM_M    = (9 << 8),  /* The ModR/M byte may ONLY refer to memory */
+	AM_O    = (10 << 8), /* The instruction has no ModR/M byte. The offset of the operand is encoded asa word/dword in the instruction */
+	AM_R    = (11 << 8), /* The reg field of ModR/M byte may ONLY select a general register */
+	AM_S    = (12 << 8), /* The reg field of ModR/M byte selects a segment register */
+	AM_T    = (13 << 8), /* The reg field of ModR/M byte selects a test register */
+	AM_X    = (14 << 8), /* Memory addressed by DS:SI */
+	AM_Y    = (15 << 8), /* Memory addressed by ES:DI */
 } ADDRESSING_METHOD;
 
 typedef enum {
-	OT_NONE,
-	OT_a, /* Two word operands or two dword operands in memory (depending on operand size) */
-	OT_b, /* byte (regardless of operand size) */
-	OT_c, /* byte or word (depending on operand size) */
-	OT_d, /* dword (regardless of operand size) */
-	OT_p, /* 48bit or 64bit pointer (depending on operand size) */
-	OT_s, /* 6 byte pseudo descriptor */
-	OT_v, /* word or dword (depending on operand size) */
-	OT_w, /* word (regardless of operand size) */
+	OT_NONE = 0,
+	OT_a    = 1, /* Two word operands or two dword operands in memory (depending on operand size) */
+	OT_b    = 2, /* byte (regardless of operand size) */
+	OT_c    = 3, /* byte or word (depending on operand size) */
+	OT_d    = 4, /* dword (regardless of operand size) */
+	OT_p    = 5, /* 48bit or 64bit pointer (depending on operand size) */
+	OT_s    = 6, /* 6 byte pseudo descriptor */
+	OT_v    = 7, /* word or dword (depending on operand size) */
+	OT_w    = 8, /* word (regardless of operand size) */
 } OPERAND_ACCESS_TYPE;
 
 typedef enum {
-	OC_Eb = (AM_E << 8) | OT_b, /* ModR/M 8bit */
-	OC_Ew = (AM_E << 8) | OT_w, /* ModR/M 16bit */
-	OC_Ed = (AM_E << 8) | OT_d, /* ModR/M 32bit */
-	OC_Ev = (AM_E << 8) | OT_v, /* ModR/M 16/32bit (depending on operand size) */
-	OC_Gb = (AM_G << 8) | OT_b, /* GPR 8bit */
-	OC_Gw = (AM_G << 8) | OT_w, /* GPR 16bit */
-	OC_Gd = (AM_G << 8) | OT_d, /* GPR 32bit */
-	OC_Gv = (AM_G << 8) | OT_v, /* GPR 16/32bit (depending on operand size) */
-	OC_Ib = (AM_I << 8) | OT_b, /* Immediate 8bit */
-	OC_Iw = (AM_I << 8) | OT_w, /* Immediate 16bit */
-	OC_Id = (AM_I << 8) | OT_d, /* Immediate 32bit */
-	OC_Iv = (AM_I << 8) | OT_v, /* Immediate 16/32bit (depending on operand size) */
-	OC_Mp = (AM_M << 8) | OT_p,
-	OC_Av = (AM_A << 8) | OT_v,
-	OC_Ap = (AM_A << 8) | OT_p,
+	OC_Eb = AM_E | OT_b, /* ModR/M 8bit */
+	OC_Ew = AM_E | OT_w, /* ModR/M 16bit */
+	OC_Ed = AM_E | OT_d, /* ModR/M 32bit */
+	OC_Ev = AM_E | OT_v, /* ModR/M 16/32bit (depending on operand size) */
+	OC_Gb = AM_G | OT_b, /* GPR 8bit */
+	OC_Gw = AM_G | OT_w, /* GPR 16bit */
+	OC_Gd = AM_G | OT_d, /* GPR 32bit */
+	OC_Gv = AM_G | OT_v, /* GPR 16/32bit (depending on operand size) */
+	OC_Ib = AM_I | OT_b, /* Immediate 8bit */
+	OC_Iw = AM_I | OT_w, /* Immediate 16bit */
+	OC_Id = AM_I | OT_d, /* Immediate 32bit */
+	OC_Iv = AM_I | OT_v, /* Immediate 16/32bit (depending on operand size) */
+	OC_Mp = AM_M | OT_p,
+	OC_Av = AM_A | OT_v,
+	OC_Ap = AM_A | OT_p,
 } OPERAND_CODE;
 static int i80386_decode_operand_type(I80386* cpu, I80386_OPERAND* op, OPERAND_ACCESS_TYPE ot);
 static int i80386_decode_addressing_method(I80386* cpu, I80386_OPERAND* op, ADDRESSING_METHOD am);
 static int i80386_decode_operand_type(I80386* cpu, I80386_OPERAND* op, OPERAND_ACCESS_TYPE ot) {
 	switch (ot) {
-		case OT_a:
-			op->size = cpu->operand_size ? 8 : 4;
-			break;
 		case OT_b:
 			op->size = 1;
 			break;
-		case OT_c:
-			op->size = cpu->operand_size ? 2 : 1;
+		case OT_w:
+			op->size = 2;
 			break;
 		case OT_d:
 			op->size = 4;
 			break;
-		case OT_p:
-			op->size = cpu->operand_size ? 8 : 6;
-			break;
 		case OT_s:
 			op->size = 6;
+			break;
+
+		case OT_c:
+			op->size = cpu->operand_size ? 2 : 1;
 			break;
 		case OT_v:
 			op->size = cpu->operand_size ? 4 : 2;
 			break;
-		case OT_w:
-			op->size = 2;
+		case OT_a:
+			op->size = cpu->operand_size ? 8 : 4;
+			break;
+		case OT_p:
+			op->size = cpu->operand_size ? 8 : 6;
 			break;
 		default:
 			op->size = 0;
@@ -6414,7 +6415,7 @@ static int i80386_get_operand(I80386* cpu, I80386_OPERAND* op, OPERAND_CODE oc) 
 	if (!i80386_decode_operand_type(cpu, op, oc & 0xFF)) {
 		return 0;
 	}
-	if (!i80386_decode_addressing_method(cpu, op, (oc >> 8) & 0xFF)) {
+	if (!i80386_decode_addressing_method(cpu, op, oc & 0xFF00)) {
 		return 0;
 	}
 	return 1;
@@ -6443,6 +6444,8 @@ static int i80386_read_operand(I80386* cpu, const I80386_OPERAND* op, void* valu
 					return fetch_word(cpu, value);
 				case 4:
 					return fetch_dword(cpu, value);
+				case 8:
+					return fetch_qword(cpu, value);
 				default:
 					return 0;
 			}
@@ -6456,6 +6459,9 @@ static int i80386_read_operand(I80386* cpu, const I80386_OPERAND* op, void* valu
 					return 1;
 				case 4:
 					*(uint32_t*)value = reg32_read(cpu, op->reg.index);
+					return 1;
+				case 8:
+					*(uint64_t*)value = reg32_read(cpu, op->reg.index);
 					return 1;
 				default:
 					return 0;
@@ -6504,6 +6510,9 @@ static int i80386_write_operand(I80386* cpu, const I80386_OPERAND* op, void* val
 					return 1;
 				case 4:
 					reg32_write(cpu, op->reg.index, *(uint32_t*)value);
+					return 1;
+				case 8:
+					reg32_write(cpu, op->reg.index, *(uint64_t*)value);
 					return 1;
 				default:
 					return 0;
