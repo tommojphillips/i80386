@@ -3135,30 +3135,43 @@ static void std(I80386* cpu) {
 
 static void inc_reg(I80386* cpu) {
 	/* Inc reg16 (40-47) b01000REG */
+	if (cpu->operand_size) {
+		uint32_t tmp = reg32_read(cpu, cpu->opcode);
+		i80386_alu_inc32(cpu, &tmp);
+		reg32_write(cpu, cpu->opcode, tmp);
+	}
+	else {
 	uint16_t tmp = reg16_read(cpu, cpu->opcode);
 	i80386_alu_inc16(cpu, &tmp);
 	reg16_write(cpu, cpu->opcode, tmp);
 }
+}
 static void inc_rm(I80386* cpu) {
-	/* Inc R/M (FE/FF, R/M reg = 000) b1111111W */
-	if (W) {
+	/* Inc Eb/Ev (FE/FF, R/M reg = b000) b1111111W */
 		I80386_OPERAND rm = { 0 };
-		uint16_t tmp = 0;
 		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
+	if (W) {
+		if (cpu->operand_size) {
+			uint32_t tmp = 0;
+			if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_inc32(cpu, &tmp);
+			modrm_write_rm32(cpu, &rm, tmp);
+		}
+		else {
+			uint16_t tmp = 0;
 		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
 			return;
 		}
 		i80386_alu_inc16(cpu, &tmp);
 		modrm_write_rm16(cpu, &rm, tmp);
 	}
+	}
 	else {
-		I80386_OPERAND rm = { 0 };
 		uint8_t tmp = 0;
-		if (!modrm_get_rm(cpu, &rm)) {
-			return;
-		}
 		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
 			return;
 		}
@@ -3169,30 +3182,43 @@ static void inc_rm(I80386* cpu) {
 
 static void dec_reg(I80386* cpu) {
 	/* Dec reg16 (48-4F) b01001REG */
+	if (cpu->operand_size) {
+		uint32_t tmp = reg32_read(cpu, cpu->opcode);
+		i80386_alu_dec32(cpu, &tmp);
+		reg32_write(cpu, cpu->opcode, tmp);
+	}
+	else {
 	uint16_t tmp = reg16_read(cpu, cpu->opcode);
 	i80386_alu_dec16(cpu, &tmp);
 	reg16_write(cpu, cpu->opcode, tmp);
 }
+}
 static void dec_rm(I80386* cpu) {
-	/* Dec R/M (FE/FF, R/M reg = 001) b1111111W */
-	if (W) {
+	/* Dec Eb/Ev (FE/FF, R/M reg = b001) b1111111W */
 		I80386_OPERAND rm = { 0 };
-		uint16_t tmp = 0;
 		if (!modrm_get_rm(cpu, &rm)) {
 			return;
 		}
+	if (W) {
+		if (cpu->operand_size) {
+			uint32_t tmp = 0;
+			if (!modrm_read_rm32(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_dec32(cpu, &tmp);
+			modrm_write_rm32(cpu, &rm, tmp);
+		}
+		else {
+			uint16_t tmp = 0;
 		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
 			return;
 		}
 		i80386_alu_dec16(cpu, &tmp);
 		modrm_write_rm16(cpu, &rm, tmp);
 	}
+	}
 	else {
-		I80386_OPERAND rm = { 0 };
 		uint8_t tmp = 0;
-		if (!modrm_get_rm(cpu, &rm)) {
-			return;
-		}
 		if (!modrm_read_rm8(cpu, &rm, &tmp)) {
 			return;
 		}
