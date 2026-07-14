@@ -6019,12 +6019,11 @@ static void lar(I80386* cpu) {
 	if (!modrm_read_rm16(cpu, &rm, &selector)) {
 		return;
 	}
-	if (selector == 0) {
+	if ((selector & 0xFFF8) == 0) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
 	if (!i80386_read_descriptor_table_entry(cpu, selector, &descriptor)) {
-		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
 	if (descriptor.ar.dpl < cpu->cpl) {
@@ -6058,12 +6057,11 @@ static void lsl(I80386* cpu) {
 	if (!modrm_read_rm16(cpu, &rm, &selector)){
 		return;
 	}
-	if (selector == 0) {
+	if ((selector & 0xFFF8) == 0) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
 	if (!i80386_read_descriptor_table_entry(cpu, selector, &descriptor)) {
-		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
 	if (descriptor.ar.dpl < cpu->cpl) {
@@ -6071,7 +6069,12 @@ static void lsl(I80386* cpu) {
 		return;
 	}
 
+	if (cpu->operand_size) {
+		modrm_write_reg32(cpu, descriptor.limit_lo | ((uint32_t)descriptor.ar.limit_hi << 16));
+	}
+	else {
 	modrm_write_reg16(cpu, descriptor.limit_lo);
+	}
 	cpu->psw.zf = 1; /* ZF=1 indicates success */
 }
 static void clts(I80386* cpu) {
