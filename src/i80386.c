@@ -44,10 +44,13 @@
 #define ZE 0 /* Zero-extend */
 #define SE 1 /* Sign-extend */
 
-#define SR_TYPE_DATA 0
-#define SR_TYPE_STACK 1
-#define SR_TYPE_CODE 2
-#define SR_TYPE_SYSTEM 3
+#define SR_TYPE_DATA   0
+#define SR_TYPE_STACK  1
+#define SR_TYPE_CODE   2
+#define SR_TYPE_LDT    3
+#define SR_TYPE_TR     4
+#define SR_TYPE_TSS    5
+#define SR_TYPE_SYS    6
 
 void i80386_exception(I80386* cpu, uint8_t exception);
 void i80386_exception_code(I80386* cpu, uint8_t exception, uint16_t code);
@@ -7735,6 +7738,10 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 		uint8_t	rpl = selector & 0x3;
 		uint16_t index = selector & 0xFFF8;
 
+		if (sreg_index < 0 || sreg_index >= I80386_SEGMENT_COUNT) {
+			return 0;
+		}
+
 		if (sreg_index == SEG_CS) {
 			sr_type = SR_TYPE_CODE;
 		}
@@ -7747,98 +7754,187 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 		else if (sreg_index == SEG_TR) {
 			sr_type = SR_TYPE_TR;
 		}
-		else if (sreg_index < 0 || sreg_index >= I80386_SEGMENT_COUNT) {
-			sr_type = SR_TYPE_SYS;
-		}
 		else {
 			sr_type = SR_TYPE_DATA;
 		}
 
+		/* Read descriptor */
+		if (index != 0) {
 		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+				return 0;
+			}
+		}
+
+		switch (sr_type) {
+			case SR_TYPE_DATA:
+				if (index == 0) {
+					/* ES/DS/FS/GS are allowed to be loaded with a null selector. */
+					break;
+				}
+
+				/* Must be present */
+				if (!entry.ar.present) {
+					i80386_exception_code(cpu, EXCEPTION_NP, selector);
+					return 0;
+				}
+
+				/* Cannot be system */
+				if (!entry.ar.s) {
 			i80386_exception_code(cpu, EXCEPTION_GP, selector);
 			return 0;
 		}
 
-		if (sr_type == SR_TYPE_DATA) {
-			if (!entry.access.p) {
+				/* Must be readable */
+				if (entry.ar.e && !entry.ar.rw) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
+				break;
+			case SR_TYPE_CODE:
+				/* CS cannot have a NULL selector */
+				if (index == 0) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
+
+				/*  Must be present */
+				if (!entry.ar.present) {
 				i80386_exception_code(cpu, EXCEPTION_NP, selector);
 				return 0;
 			}
 
-			if (!entry.access.s) {
+				/* Cannot be system */
+				if (!entry.ar.s) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
+
+				/* Must be executable */
+				if (!entry.ar.e) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
+
+				if (entry.ar.conforming) { 
+					/* Conforming */
+
+					/* CPL must be >= DPL */
+					if (cpu->cpl < entry.ar.dpl) {
+						i80386_exception_code(cpu, EXCEPTION_GP, selector);
+						return 0;
+					}
+				}
+				else {
+					/* Non-conforming */
+
+					/* CPL must be >= DPL */
+					if (cpu->cpl < entry.ar.dpl) {
 				i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
 
-			/* Only selectors of executable segments that are readable can be loaded into data segment registers */
-			if (entry.access.e && !entry.access.rw) {
-				i80386_exception(cpu, EXCEPTION_GP);
+					/* RPL must be >= CPL */
+					if (rpl < cpu->cpl) {
+						i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
 		}
-		else if (sr_type == SR_TYPE_STACK) {
+				break;
+			case SR_TYPE_STACK:
 			/* SS cannot have a NULL selector */
-			if (selector == 0) {
-				i80386_exception(cpu, EXCEPTION_GP);
+				if (index == 0) {
+					i80386_exception_code(cpu, EXCEPTION_SS, selector);
+					return 0;
+				}
+
+				/* Must be present */
+				if (!entry.ar.present) {
+					i80386_exception_code(cpu, EXCEPTION_SS, selector);
 				return 0;
 			}
 
-			if (!entry.access.p) {
+				/* Cannot be system */
+				if (!entry.ar.s) {
 				i80386_exception_code(cpu, EXCEPTION_SS, selector);
 				return 0;
 			}
 
-			if (!entry.access.s) {
+				/* Cannot be executable */
+				if (entry.ar.e) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
+
+				/* Must be writable */
+				if (!entry.ar.rw) {
 				i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
 
-			/* Only selectors of writable data segments can be loaded into SS */
-			if (entry.access.e || !entry.access.rw) {
-				i80386_exception(cpu, EXCEPTION_GP);
+				/* CPL must == DPL */
+				if (cpu->cpl != entry.ar.dpl) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
+				break;
+			case SR_TYPE_LDT:
+				/* LDT is allowed to be loaded with a null selector. */
+				if (index == 0) {
+					break;
 		}
-		else if (sr_type == SR_TYPE_CODE) {
-			/* CS cannot have a NULL selector */
-			if (selector == 0) {
-				i80386_exception(cpu, EXCEPTION_GP);
+
+				/* TI must be 0 (GDT) */
+				if (selector & 0x4) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
 
-			if (!entry.access.p) {
+				/* Must be present */
+				if (!entry.ar.present) {
 				i80386_exception_code(cpu, EXCEPTION_NP, selector);
 				return 0;
 			}
 
-			if (!entry.access.s) {
+				/* Must be system */
+				if (entry.ar.s) {
 				i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
 
-			/* CS Can only be loaded with a selector of an executable segment */
-			if (!entry.access.e) {
-				i80386_exception(cpu, EXCEPTION_GP);
+				/* Must be ldt */
+				if (entry.ar.type != I80386_GATE_TYPE_LDT) {
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
+				break;
+			case SR_TYPE_TR:
+				/* todo: is TR allowed to be loaded with a null selector? */
+				if (index == 0) {
+					break;
 		}
-		else if (sr_type == SR_TYPE_SYSTEM) {
-			if (!entry.access.p) {
+
+				/* Must be present */
+				if (!entry.ar.present) {
 				i80386_exception_code(cpu, EXCEPTION_NP, selector);
 				return 0;
 			}
 
-			if (!entry.access.s) {
+				/* Must be system */
+				if (entry.ar.s) {
 				i80386_exception_code(cpu, EXCEPTION_GP, selector);
 				return 0;
 			}
+				break;
+
+			default:
+			case SR_TYPE_SYS:
+				return 0;
 		}
+		
 		i80386_update_segment_descriptor_cache(&entry, &sreg->desc);
 		sreg->selector = selector;
 		return 1;
 	}
-
-	return 0;
 }
 void i80386_copy_segment_descriptor(I80386_SEGMENT_REGISTER* dest, const I80386_SEGMENT_REGISTER* src) {
 	dest->selector = src->selector;

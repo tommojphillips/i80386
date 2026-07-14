@@ -63,6 +63,8 @@
 #define SEG_DS 3
 #define SEG_FS 4
 #define SEG_GS 5
+#define SEG_LDT 6
+#define SEG_TR 7
 
 #define I80386_REGISTER_COUNT         8
 #define I80386_SEGMENT_COUNT          6
