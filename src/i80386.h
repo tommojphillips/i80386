@@ -776,6 +776,23 @@ typedef struct I80386 {
 
 #pragma warning(pop) /* C4201 - nameless struct */
 
+/* Assert struct sizes */
+static_assert(sizeof(I80386_MOD_RM) == 1, "Struct: I80386_MOD_RM not 1 byte");
+static_assert(sizeof(I80386_SIB) == 1, "Struct: I80386_SIB not 1 byte");
+static_assert(sizeof(I80386_PROGRAM_STATUS_WORD) == 2, "Struct: I80386_PROGRAM_STATUS_WORD not 2 bytes");
+static_assert(sizeof(I80386_MACHINE_STATUS_WORD) == 2, "Struct: I80386_MACHINE_STATUS_WORD not 2 bytes");
+static_assert(sizeof(I80386_EFLAGS) == 4, "Struct: I80386_EFLAGS not 4 bytes");
+static_assert(sizeof(I80386_CR0) == 4, "Struct: I80386_CR0 not 4 bytes");
+static_assert(sizeof(I80386_DR6) == 4, "Struct: I80386_DR6 not 4 bytes");
+static_assert(sizeof(I80386_DR7) == 4, "Struct: I80386_DR7 not 4 bytes");
+static_assert(sizeof(I80386_TASK_STATE_SEGMENT) == 104, "Struct: I80386_TASK_STATE_SEGMENT not 104 bytes");
+static_assert(sizeof(I80386_DESCRIPTOR_ACCESS_RIGHTS) == 2, "Struct: I80386_DESCRIPTOR_ACCESS_RIGHTS not 2 bytes");
+static_assert(sizeof(I80386_DESCRIPTOR_TABLE_ENTRY) == 8, "Struct: I80386_DESCRIPTOR_TABLE_ENTRY not 8 bytes");
+static_assert(sizeof(I80386_LINEAR_ADDRESS) == 4, "Struct: I80386_LINEAR_ADDRESS not 4 bytes");
+static_assert(sizeof(I80386_PAGE_TABLE_ENTRY) == 4, "Struct: I80386_PAGE_TABLE_ENTRY not 4 bytes");
+static_assert(sizeof(I80386_GATE) == 8, "Struct: I80386_GATE not 8 bytes");
+static_assert(sizeof(I80386_LOADALL) == 208, "Struct: I80386_LOADALL not 208 bytes");
+
 #ifdef __cplusplus
 extern "C" {
 #endif
