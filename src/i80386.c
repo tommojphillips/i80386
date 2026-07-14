@@ -2377,9 +2377,10 @@ void i80386_exception(I80386 * cpu, uint8_t exception) {
 			break;
 	}
 }
+
 void i80386_exception_code(I80386* cpu, uint8_t exception, uint16_t code) {
-	cpu->exception.code = code;
 	i80386_exception(cpu, exception);
+	cpu->exception.code = code;
 }
 void i80386_page_fault(I80386* cpu, uint32_t linear_address, int present, int is_write) {
 	cpu->cr2 = linear_address;
@@ -7728,30 +7729,12 @@ void i80386_update_segment_descriptor_cache(const I80386_DESCRIPTOR_TABLE_ENTRY*
 	}
 }
 int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int sreg_index, uint16_t selector) {
-	int sr_type = 0;
-
-	if (sreg_index < 0 || sreg_index >= I80386_SEGMENT_COUNT) {
-		sr_type = SR_TYPE_SYSTEM;
-	}
-	else {
-		if (sreg_index == SEG_CS) {
-			sr_type = SR_TYPE_CODE;
-		}
-		else if (sreg_index == SEG_SS) {
-			sr_type = SR_TYPE_STACK;
-		}
-		else {
-			sr_type = SR_TYPE_DATA;
-		}
-	}
-	
 	if (!cpu->msw.pe) {
 		/* Real mode */
 		sreg->selector = selector;
 		sreg->desc.base = (uint32_t)selector << 4;
 		sreg->desc.limit = 0x0000FFFF;
-		sreg->desc.access.byte = 0;
-		sreg->desc.flags.byte = 0;
+		sreg->desc.ar.word = 0;
 		return 1;
 	}
 	else if (cpu->eflags.vm) {
@@ -7759,12 +7742,34 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 		sreg->selector = selector;
 		sreg->desc.base = (uint32_t)selector << 4;
 		sreg->desc.limit = 0x0000FFFF;
-		sreg->desc.access.byte = 0;
-		sreg->desc.flags.byte = 0;
+		sreg->desc.ar.word = 0;
+		return 1;
 	}
 	else {
 		/* Protected mode */
+		int sr_type = 0;
 		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+		uint8_t	rpl = selector & 0x3;
+		uint16_t index = selector & 0xFFF8;
+
+		if (sreg_index == SEG_CS) {
+			sr_type = SR_TYPE_CODE;
+		}
+		else if (sreg_index == SEG_SS) {
+			sr_type = SR_TYPE_STACK;
+		}
+		else if (sreg_index == SEG_LDT) {
+			sr_type = SR_TYPE_LDT;
+		}
+		else if (sreg_index == SEG_TR) {
+			sr_type = SR_TYPE_TR;
+		}
+		else if (sreg_index < 0 || sreg_index >= I80386_SEGMENT_COUNT) {
+			sr_type = SR_TYPE_SYS;
+		}
+		else {
+			sr_type = SR_TYPE_DATA;
+		}
 
 		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
 			i80386_exception_code(cpu, EXCEPTION_GP, selector);

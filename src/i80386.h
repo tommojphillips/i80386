@@ -574,17 +574,18 @@ typedef struct I80386_OPERAND {
 #define	I80386_EXCEPTION_STATE_DOUBLE_FAULT 2
 #define	I80386_EXCEPTION_STATE_TRIPLE_FAULT 3
 
-typedef struct I80386_EXCEPTION {
-	uint8_t number;  /* exception_number */
-	uint8_t df_number;  /* exception_number */
-	uint8_t tf_number;  /* exception_number */
-	uint8_t state; /* exception_state */
-	uint16_t code; /* exception_code */
-} I80386_EXCEPTION;
-
 #define	I80386_EXCEPTION_CLASS_BENIGN       0
 #define	I80386_EXCEPTION_CLASS_CONTRIBUTORY 1
 #define	I80386_EXCEPTION_CLASS_PAGE_FAULT   2
+
+/* i80386 Exception */
+typedef struct I80386_EXCEPTION {
+	uint8_t number;    /* std_fault_exception_number */
+	uint8_t df_number; /* double_fault_exception_number */
+	uint8_t tf_number; /* triple_fault_exception_number */
+	uint8_t state;     /* exception_state */
+	uint16_t code;     /* exception_code */
+} I80386_EXCEPTION;
 
 #define INTERNAL_FLAG_F1Z 0x01
 #define INTERNAL_FLAG_F1  0x02
