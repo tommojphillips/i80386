@@ -1702,8 +1702,8 @@ static int i80386_stack_switch(I80386* cpu, int dpl, int param_count, uint8_t ty
 		case I80386_GATE_TYPE_CALL_286:
 			*new_esp = (*new_esp) - 2;
 			if (!write_word_logical(cpu, new_ss->desc.base, *new_esp, old_selector)) {
-		return 0;
-	}
+				return 0;
+			}
 			*new_esp = (*new_esp) - 2;
 			if (!write_word_logical(cpu, new_ss->desc.base, *new_esp, old_esp & 0xFFFF)) {
 				return 0;
@@ -2215,10 +2215,10 @@ static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH
 			/* task_set_busy_bits */
 			i80386_task_clear_busy(&old_entry);
 
-	/* task_write_back_descriptor */
-	if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
-		return 0;
-	}
+			/* task_write_back_descriptor */
+			if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
+				return 0;
+			}
 			break;
 	}
 
@@ -2339,9 +2339,9 @@ void i80386_int(I80386* cpu, uint8_t vector, int interrupt_type) {
 			default:
 				i80386_exception_code(cpu, EXCEPTION_GP, 0);
 				return;
-		}		
+		}
 	}
-	}
+}
 static int i80386_classify_exception(uint8_t exception) {
     switch (exception) {
         case EXCEPTION_TS:
@@ -2748,17 +2748,17 @@ static void pop_seg(I80386* cpu) {
 	/* Pop SR (07/0F/17/1F/A1/A9) bX0ESRXXX */
 	uint8_t esr = ESR;
 	if (esr < I80386_SEGMENT_COUNT) {
-	uint16_t selector = 0;
-	if (!pop_word(cpu, &selector)) {
-		return;
+		uint16_t selector = 0;
+		if (!pop_word(cpu, &selector)) {
+			return;
+		}
+		if (!i80386_load_segment_register(cpu, &cpu->segment_registers[esr], esr, selector)) {
+			return;
+		}
+		if (esr == SEG_SS) {
+			cpu->int_delay = 1;
+		}
 	}
-	if (!i80386_load_segment_register(cpu, &cpu->segment_registers[esr], esr, selector)) {
-		return;
-	}
-	if (esr == SEG_SS) {
-		cpu->int_delay = 1;
-	}
-}
 }
 static void push_reg(I80386* cpu) {
 	/* Push REG (50-57) b01010REG */
@@ -2983,9 +2983,9 @@ static void push_imm(I80386* cpu) {
 			push_dword(cpu, se);
 		}
 		else {
-		uint16_t se = sign_extend8_16(imm);
-		push_word(cpu, se);
-	}
+			uint16_t se = sign_extend8_16(imm);
+			push_word(cpu, se);
+		}
 	}
 	else {
 		if (cpu->operand_size) {
@@ -2996,13 +2996,13 @@ static void push_imm(I80386* cpu) {
 			push_dword(cpu, imm);
 		}
 		else {
-		uint16_t imm = 0;
-		if (!fetch_word(cpu, &imm)) {
-			return;
+			uint16_t imm = 0;
+			if (!fetch_word(cpu, &imm)) {
+				return;
+			}
+			push_word(cpu, imm);
 		}
-		push_word(cpu, imm);
 	}
-}
 }
 
 static void enter(I80386* cpu) {
@@ -3282,17 +3282,17 @@ static void inc_reg(I80386* cpu) {
 		reg32_write(cpu, cpu->opcode, tmp);
 	}
 	else {
-	uint16_t tmp = reg16_read(cpu, cpu->opcode);
-	i80386_alu_inc16(cpu, &tmp);
-	reg16_write(cpu, cpu->opcode, tmp);
-}
+		uint16_t tmp = reg16_read(cpu, cpu->opcode);
+		i80386_alu_inc16(cpu, &tmp);
+		reg16_write(cpu, cpu->opcode, tmp);
+	}
 }
 static void inc_rm(I80386* cpu) {
 	/* Inc Eb/Ev (FE/FF, R/M reg = b000) b1111111W */
-		I80386_OPERAND rm = { 0 };
-		if (!modrm_get_rm(cpu, &rm)) {
-			return;
-		}
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
 	if (W) {
 		if (cpu->operand_size) {
 			uint32_t tmp = 0;
@@ -3304,12 +3304,12 @@ static void inc_rm(I80386* cpu) {
 		}
 		else {
 			uint16_t tmp = 0;
-		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
-			return;
+			if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_inc16(cpu, &tmp);
+			modrm_write_rm16(cpu, &rm, tmp);
 		}
-		i80386_alu_inc16(cpu, &tmp);
-		modrm_write_rm16(cpu, &rm, tmp);
-	}
 	}
 	else {
 		uint8_t tmp = 0;
@@ -3328,17 +3328,17 @@ static void dec_reg(I80386* cpu) {
 		reg32_write(cpu, cpu->opcode, tmp);
 	}
 	else {
-	uint16_t tmp = reg16_read(cpu, cpu->opcode);
-	i80386_alu_dec16(cpu, &tmp);
-	reg16_write(cpu, cpu->opcode, tmp);
-}
+		uint16_t tmp = reg16_read(cpu, cpu->opcode);
+		i80386_alu_dec16(cpu, &tmp);
+		reg16_write(cpu, cpu->opcode, tmp);
+	}
 }
 static void dec_rm(I80386* cpu) {
 	/* Dec Eb/Ev (FE/FF, R/M reg = b001) b1111111W */
-		I80386_OPERAND rm = { 0 };
-		if (!modrm_get_rm(cpu, &rm)) {
-			return;
-		}
+	I80386_OPERAND rm = { 0 };
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
 	if (W) {
 		if (cpu->operand_size) {
 			uint32_t tmp = 0;
@@ -3350,12 +3350,12 @@ static void dec_rm(I80386* cpu) {
 		}
 		else {
 			uint16_t tmp = 0;
-		if (!modrm_read_rm16(cpu, &rm, &tmp)) {
-			return;
+			if (!modrm_read_rm16(cpu, &rm, &tmp)) {
+				return;
+			}
+			i80386_alu_dec16(cpu, &tmp);
+			modrm_write_rm16(cpu, &rm, tmp);
 		}
-		i80386_alu_dec16(cpu, &tmp);
-		modrm_write_rm16(cpu, &rm, tmp);
-	}
 	}
 	else {
 		uint8_t tmp = 0;
@@ -3954,42 +3954,42 @@ static void jmp_intra_indirect(I80386* cpu) {
 }
 static void jmp_inter_direct(I80386* cpu) {
 	/* jmp Ap - (EA) b11101010 */
-		uint32_t offset = 0;
-		uint16_t selector = 0;
+	uint32_t offset = 0;
+	uint16_t selector = 0;
 
-		if (cpu->operand_size) {
-			/* EA cp JMP ptr16:32 */
-			uint32_t imm = 0;
-			if (!fetch_dword(cpu, &imm)) {
-				return;
-			}
-			offset = imm;
-		}
-		else {
-			/* EA cd JMP ptr16:16 */
-			uint16_t imm = 0;
-			if (!fetch_word(cpu, &imm)) {
-				return;
-			}
-			offset = imm;
-		}
-
-		if (!fetch_word(cpu, &selector)) {
+	if (cpu->operand_size) {
+		/* EA cp JMP ptr16:32 */
+		uint32_t imm = 0;
+		if (!fetch_dword(cpu, &imm)) {
 			return;
 		}
+		offset = imm;
+	}
+	else {
+		/* EA cd JMP ptr16:16 */
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		offset = imm;
+	}
+
+	if (!fetch_word(cpu, &selector)) {
+		return;
+	}
 
 	if (!cpu->msw.pe) {
 		/* Real mode */
 		far_jmp_real_mode(cpu, selector, offset);
-		}
+	}
 	else if (cpu->eflags.vm) {
 		/* Virtual 8086 mode */
 	}
 	else {
 		/* Protected mode */
 		far_jmp_protected_mode(cpu, selector, offset);
-			}
-		}
+	}
+}
 static void jmp_inter_indirect(I80386* cpu) {
 	/* jmp Ep - (FF /5) b11111111 */
 	uint16_t selector = 0;
@@ -4005,37 +4005,37 @@ static void jmp_inter_indirect(I80386* cpu) {
 		return;
 	}
 
-		if (cpu->operand_size) {
-			/* FF /5 JMP m16:32 */
-			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
-				return;
-			}
-			cpu->effective_address.logical_address.offset += 4;
-		}
-		else {
-			/* FF /5 JMP m16:16 */
-			if (!read_word_ea(cpu, &cpu->effective_address, (uint16_t*)&offset)) {
-				return;
-			}
-			cpu->effective_address.logical_address.offset += 2;
-		}
-
-		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+	if (cpu->operand_size) {
+		/* FF /5 JMP m16:32 */
+		if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
 			return;
 		}
+		cpu->effective_address.logical_address.offset += 4;
+	}
+	else {
+		/* FF /5 JMP m16:16 */
+		if (!read_word_ea(cpu, &cpu->effective_address, (uint16_t*)&offset)) {
+			return;
+		}
+		cpu->effective_address.logical_address.offset += 2;
+	}
+
+	if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+		return;
+	}
 
 	if (!cpu->msw.pe) {
 		/* Real mode */
 		far_jmp_real_mode(cpu, selector, offset);
-		}
+	}
 	else if (cpu->eflags.vm) {
 		/* Virtual 8086 mode */
 	}
 	else {
 		/* Protected mode */
 		far_jmp_protected_mode(cpu, selector, offset);
-			}
-		}
+	}
+}
 
 static void call_intra_direct(I80386* cpu) {
 	/* Call Av - (E8) b11101000 */
@@ -4090,25 +4090,25 @@ static void call_intra_indirect(I80386* cpu) {
 }
 static void call_inter_direct(I80386* cpu) {
 	/* call Ap - (9A) b10011010 */
-		uint16_t selector = 0;
+	uint16_t selector = 0;
 	uint32_t offset = 0;
 
-		if (cpu->operand_size) {
-			if (!fetch_dword(cpu, &offset)) {
-				return;
-			}
-			}
-		else {
-			uint16_t imm = 0;
-			if (!fetch_word(cpu, &imm)) {
-				return;
-			}
-			offset = imm; /* clear upper 16bits */
-		}
-
-	if (!fetch_word(cpu, &selector)) {
+	if (cpu->operand_size) {
+		if (!fetch_dword(cpu, &offset)) {
 			return;
 		}
+	}
+	else {
+		uint16_t imm = 0;
+		if (!fetch_word(cpu, &imm)) {
+			return;
+		}
+		offset = imm; /* clear upper 16bits */
+	}
+
+	if (!fetch_word(cpu, &selector)) {
+		return;
+	}
 
 	if (!cpu->msw.pe) {
 		/* Real mode */
@@ -4120,8 +4120,8 @@ static void call_inter_direct(I80386* cpu) {
 	else {
 		/* Protected mode */
 		far_call_protected_mode(cpu, selector, offset);
-			}
-		}
+	}
+}
 static void call_inter_indirect(I80386* cpu) {
 	/* call Ep (FF /3) b11111111 */
 	uint16_t selector = 0;
@@ -4141,39 +4141,39 @@ static void call_inter_indirect(I80386* cpu) {
 
 	if (!modrm_get_effective_address(cpu, NULL)) {
 		return;
-		}
+	}
 
-		if (cpu->operand_size) {
-			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
-				return;
-			}
-			cpu->effective_address.logical_address.offset += 4;
-		}
-		else {
-			uint16_t imm = 0;
-			if (!read_word_ea(cpu, &cpu->effective_address, &imm)) {
-				return;
-			}
-			offset = imm; /* clear upper 16bits */
-			cpu->effective_address.logical_address.offset += 2;
-		}
-
-		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+	if (cpu->operand_size) {
+		if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
 			return;
 		}
+		cpu->effective_address.logical_address.offset += 4;
+	}
+	else {
+		uint16_t imm = 0;
+		if (!read_word_ea(cpu, &cpu->effective_address, &imm)) {
+			return;
+		}
+		offset = imm; /* clear upper 16bits */
+		cpu->effective_address.logical_address.offset += 2;
+	}
+
+	if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
+		return;
+	}
 
 	if (!cpu->msw.pe) {
 		/* Real mode */
 		far_call_real_mode(cpu, selector, offset);
-		}
+	}
 	else if (cpu->eflags.vm) {
 		/* Virtual 8086 mode */
-			}
-			else {
+	}
+	else {
 		/* Protected mode */
 		far_call_protected_mode(cpu, selector, offset);
-				}
-			}
+	}
+}
 
 static void ret_intra(I80386* cpu) {
 	/* ret/retd <Iw> (C2/C3) b1100001E */
@@ -4235,24 +4235,24 @@ static void ret_inter(I80386* cpu) {
 		return;
 	}
 
-		if (cpu->operand_size) {
+	if (cpu->operand_size) {
 		if (!pop_dword_at(cpu, &final_esp, &offset)) {
-				return;
-			}
-		if (!pop_word_align_at(cpu, &final_esp, &selector)) {
-				return;
-			}
+			return;
 		}
-		else {
-			uint16_t ip = 0;
-			if (!pop_word_at(cpu, &final_esp, &ip)) {
-				return;
-			}
+		if (!pop_word_align_at(cpu, &final_esp, &selector)) {
+			return;
+		}
+	}
+	else {
+		uint16_t ip = 0;
+		if (!pop_word_at(cpu, &final_esp, &ip)) {
+			return;
+		}
 		offset = ip;
 		if (!pop_word_at(cpu, &final_esp, &selector)) {
-				return;
-			}
+			return;
 		}
+	}
 
 	if (!cpu->msw.pe) {
 		/* Real mode */
@@ -4317,7 +4317,7 @@ static void ret_inter(I80386* cpu) {
 	else {
 		cpu->esp = (final_esp + frame) & 0xFFFF;
 	}
-	}
+}
 
 static void mov_rm_imm(I80386* cpu) {
 	/* mov Eb,Ib / Ev,Iv - (C6/C7) b1100011W */
@@ -5929,7 +5929,7 @@ static void ltr(I80386* cpu) {
 	/* Mark descriptor busy */
 	if (entry.ar.type == I80386_GATE_TYPE_AVAL_286) {
 		entry.ar.type = I80386_GATE_TYPE_BUSY_286;
-}
+	}
 	else {
 		entry.ar.type = I80386_GATE_TYPE_BUSY_386;
 	}
@@ -6075,7 +6075,7 @@ static void lsl(I80386* cpu) {
 		modrm_write_reg32(cpu, descriptor.limit_lo | ((uint32_t)descriptor.ar.limit_hi << 16));
 	}
 	else {
-	modrm_write_reg16(cpu, descriptor.limit_lo);
+		modrm_write_reg16(cpu, descriptor.limit_lo);
 	}
 	cpu->psw.zf = 1; /* ZF=1 indicates success */
 }
@@ -6158,7 +6158,7 @@ static void loadall(I80386* cpu) {
 
 	for (uint32_t i = 0; i < sizeof(I80386_LOADALL); i += sizeof(uint32_t)) {
 		read_dword_logical(cpu, base, offset + i, &((uint32_t*)&buffer)[i]);
-		}
+	}
 
 	cpu->cr0.dword = buffer.cr0;
 	cpu->eflags.dword = buffer.eflags;
@@ -6266,7 +6266,7 @@ static void bsf(I80386* cpu) {
 static void bsr(I80386* cpu) {
 	/* bit search reverse - bsr Ev,Gv - (0F BD) b10111101 */
 	exec_bin_bit_search(cpu, 1);
-	}
+}
 
 /* prefix byte */
 static int rep(I80386* cpu) {
@@ -6623,7 +6623,7 @@ static int i80386_fetch(I80386* cpu) {
 
 	cpu->effective_address.stack_address = 0;
 	cpu->effective_address.valid = 0;
-	cpu->effective_address.segment_index = 0;
+	cpu->effective_address.segment_index = 0;	
 	cpu->effective_address.logical_address.offset = 0;
 	cpu->effective_address.logical_address.base = 0;
 	
@@ -7634,7 +7634,7 @@ void i80386_reset(I80386* cpu) {
 	cpu->exception.state = 0;
 	cpu->exception.code = 0;
 
-	cpu->effective_address.valid = 0;
+	cpu->effective_address.valid = 0;	
 	cpu->effective_address.stack_address = 0;
 	cpu->effective_address.segment_index = 0;
 	cpu->effective_address.logical_address.offset = 0;
@@ -7660,9 +7660,14 @@ uint32_t i80386_get_physical_address_bo(uint32_t base, uint32_t offset) {
 uint32_t i80386_get_physical_address_so(uint16_t selector, uint32_t offset) {
 	return (((uint32_t)selector << 4) + offset) & 0xFFFFFFFF;
 }
-int i80386_read_descriptor_table_entry(const I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
-	uint8_t rpl = selector & 3U;        /* requestor's privilege level */
-	uint8_t ti = (selector >> 2U) & 1U; /* type */
+int i80386_read_interrupt_table_entry(I80386* cpu, uint8_t vector, I80386_GATE* gate) {
+	uint32_t offset = ((uint32_t)vector << 3U);
+	if (offset + 7U > cpu->idtr.limit) {
+		i80386_exception_code(cpu, EXCEPTION_GP, vector);
+		return 0;
+	}
+	return read_qword_logical(cpu, cpu->idtr.base, offset, &gate->qword);
+}
 int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
 	uint8_t ti = selector & 0x04;       /* type */
 	uint16_t index = selector & 0xFFF8; /* entry index */
@@ -7696,7 +7701,7 @@ int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DE
 }
 int i80386_write_descriptor_table_entry(I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
 	uint8_t ti = selector & 0x04;       /* type */
-	uint16_t index = selector & 0xFFF8; /* entry index */	
+	uint16_t index = selector & 0xFFF8; /* entry index */
 
 	uint32_t limit = 0;
 	uint32_t base = 0;
@@ -7782,7 +7787,7 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 
 		/* Read descriptor */
 		if (index != 0) {
-		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+			if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
 				return 0;
 			}
 		}
@@ -7802,9 +7807,9 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 
 				/* Cannot be system */
 				if (!entry.ar.s) {
-			i80386_exception_code(cpu, EXCEPTION_GP, selector);
-			return 0;
-		}
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
 
 				/* Must be readable */
 				if (entry.ar.e && !entry.ar.rw) {
@@ -7821,9 +7826,9 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 
 				/*  Must be present */
 				if (!entry.ar.present) {
-				i80386_exception_code(cpu, EXCEPTION_NP, selector);
-				return 0;
-			}
+					i80386_exception_code(cpu, EXCEPTION_NP, selector);
+					return 0;
+				}
 
 				/* Cannot be system */
 				if (!entry.ar.s) {
@@ -7851,19 +7856,19 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 
 					/* CPL must be >= DPL */
 					if (cpu->cpl < entry.ar.dpl) {
-				i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
+						i80386_exception_code(cpu, EXCEPTION_GP, selector);
+						return 0;
+					}
 
 					/* RPL must be >= CPL */
 					if (rpl < cpu->cpl) {
 						i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
-		}
+						return 0;
+					}
+				}
 				break;
 			case SR_TYPE_STACK:
-			/* SS cannot have a NULL selector */
+				/* SS cannot have a NULL selector */
 				if (index == 0) {
 					i80386_exception_code(cpu, EXCEPTION_SS, selector);
 					return 0;
@@ -7872,14 +7877,14 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 				/* Must be present */
 				if (!entry.ar.present) {
 					i80386_exception_code(cpu, EXCEPTION_SS, selector);
-				return 0;
-			}
+					return 0;
+				}
 
 				/* Cannot be system */
 				if (!entry.ar.s) {
-				i80386_exception_code(cpu, EXCEPTION_SS, selector);
-				return 0;
-			}
+					i80386_exception_code(cpu, EXCEPTION_SS, selector);
+					return 0;
+				}
 
 				/* Cannot be executable */
 				if (entry.ar.e) {
@@ -7889,63 +7894,63 @@ int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int
 
 				/* Must be writable */
 				if (!entry.ar.rw) {
-				i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
 
 				/* CPL must == DPL */
 				if (cpu->cpl != entry.ar.dpl) {
 					i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
+					return 0;
+				}
 				break;
 			case SR_TYPE_LDT:
 				/* LDT is allowed to be loaded with a null selector. */
 				if (index == 0) {
 					break;
-		}
+				}
 
 				/* TI must be 0 (GDT) */
 				if (selector & 0x4) {
 					i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
+					return 0;
+				}
 
 				/* Must be present */
 				if (!entry.ar.present) {
-				i80386_exception_code(cpu, EXCEPTION_NP, selector);
-				return 0;
-			}
+					i80386_exception_code(cpu, EXCEPTION_NP, selector);
+					return 0;
+				}
 
 				/* Must be system */
 				if (entry.ar.s) {
-				i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
 
 				/* Must be ldt */
 				if (entry.ar.type != I80386_GATE_TYPE_LDT) {
 					i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
+					return 0;
+				}
 				break;
 			case SR_TYPE_TR:
 				/* todo: is TR allowed to be loaded with a null selector? */
 				if (index == 0) {
 					break;
-		}
+				}
 
 				/* Must be present */
 				if (!entry.ar.present) {
-				i80386_exception_code(cpu, EXCEPTION_NP, selector);
-				return 0;
-			}
+					i80386_exception_code(cpu, EXCEPTION_NP, selector);
+					return 0;
+				}
 
 				/* Must be system */
 				if (entry.ar.s) {
-				i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return 0;
-			}
+					i80386_exception_code(cpu, EXCEPTION_GP, selector);
+					return 0;
+				}
 				break;
 
 			default:
@@ -8186,7 +8191,7 @@ int i80386_modrm_get_offset(const I80386* cpu, uint8_t address_size, I80386_MOD_
 						uint32_t base = reg32_read(cpu, sib.base);
 						ea->logical_address.offset = (base << sib.scale) + (int32_t)disp;
 	#else
-						/* [base + disp32] */
+						/* [base + disp32] */						
 						uint32_t base = reg32_read(cpu, sib.base);
 						ea->logical_address.offset = base + (int32_t)disp;
 	#endif

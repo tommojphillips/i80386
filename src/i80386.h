@@ -848,6 +848,12 @@ int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DE
  entry:    Input descriptor table entry */
 int i80386_write_descriptor_table_entry(I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry);
 
+/* Read interrupt descriptor table entry pointed by vector - Returns 1 if success, otherwise 0
+ cpu:      Cpu instance
+ vector:   Input interrupt vector
+ gate:     Output interrupt descriptor table entry */
+int i80386_read_interrupt_table_entry(I80386* cpu, uint8_t vector, I80386_GATE* gate);
+
 /* Update segment descriptor cache
  entry: Input descriptor table entry
  cache: Output descriptor cache */
