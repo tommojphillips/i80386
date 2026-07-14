@@ -7637,10 +7637,6 @@ void i80386_reset(I80386* cpu) {
 	cpu->exception.code = 0;
 
 	cpu->effective_address.valid = 0;
-	cpu->effective_address.displacement = 0;
-	cpu->effective_address.base = 0;
-	cpu->effective_address.index = 0;
-	cpu->effective_address.scale = 0;
 	cpu->effective_address.stack_address = 0;
 	cpu->effective_address.segment_index = 0;
 	cpu->effective_address.logical_address.offset = 0;
@@ -7944,10 +7940,6 @@ int i80386_modrm_get_segment(const I80386* cpu, uint8_t address_size, I80386_MOD
 }
 int i80386_modrm_get_offset(const I80386* cpu, uint8_t address_size, I80386_MOD_RM modrm, I80386_SIB sib, I80386_EFFECTIVE_ADDRESS* ea,
 	I80386_FETCH_BYTE fetch_byte, I80386_FETCH_WORD fetch_word, I80386_FETCH_DWORD fetch_dword, void* user_param) {
-	ea->displacement = 0;
-	ea->base = 0;
-	ea->index = 0;
-	ea->scale = 0;
 	ea->logical_address.offset = 0;
 
 	switch (modrm.mod) {
@@ -7958,22 +7950,22 @@ int i80386_modrm_get_offset(const I80386* cpu, uint8_t address_size, I80386_MOD_
 					if (sib.index == 0b100) {
 						if (sib.base == 0b101) {
 							/* [disp32] */
-							if (!fetch_dword(user_param, &ea->displacement)) {
+							uint32_t disp = 0;
+							if (!fetch_dword(user_param, &disp)) {
 								return 0;
 							}
-							ea->logical_address.offset = ea->displacement;
+							ea->logical_address.offset = disp;
 							return 1;
 						}
 						else {
 	#ifdef _386_SIB_UNDEFINED_
-							/* [base * scale] - scale!=b00 && index=0b100 is undefined on 386 */
-							ea->base = reg32_read(cpu, sib.base);
-							ea->scale = sib.scale;
-							ea->logical_address.offset = ea->base << ea->scale;
+							/* [base * scale] - scale!=b00 && index==0b100 is undefined on 386 */
+							uint32_t base = reg32_read(cpu, sib.base);
+							ea->logical_address.offset = base << sib.scale;
 	#else
 							/* [base] */
-							ea->base = reg32_read(cpu, sib.base);
-							ea->logical_address.offset = ea->base;
+							uint32_t base = reg32_read(cpu, sib.base);
+							ea->logical_address.offset = base;
 	#endif
 							return 1;
 						}
@@ -7981,30 +7973,30 @@ int i80386_modrm_get_offset(const I80386* cpu, uint8_t address_size, I80386_MOD_
 					else {
 						if (sib.base == 0b101) {
 							/* [index * scale + disp32] */
-							if (!fetch_dword(user_param, &ea->displacement)) {
+							uint32_t disp = 0;
+							if (!fetch_dword(user_param, &disp)) {
 								return 0;
 							}
-							ea->index = reg32_read(cpu, sib.index);
-							ea->scale = sib.scale;
-							ea->logical_address.offset = (ea->index << sib.scale) + (int32_t)ea->displacement;
+							uint32_t index = reg32_read(cpu, sib.index);
+							ea->logical_address.offset = (index << sib.scale) + (int32_t)disp;
 							return 1;
 						}
 						else {
-							/* [index * scale + base] */
-							ea->base = reg32_read(cpu, sib.base);
-							ea->index = reg32_read(cpu, sib.index);
-							ea->scale = sib.scale;
-							ea->logical_address.offset = ea->base + (ea->index << ea->scale);
+							/* [base + index * scale] */
+							uint32_t base = reg32_read(cpu, sib.base);
+							uint32_t index = reg32_read(cpu, sib.index);
+							ea->logical_address.offset = base + (index << sib.scale);
 							return 1;
 						}
 					}
 				}
 				else if (modrm.rm == 0b101) {
 					/* [disp32] */
-					if (!fetch_dword(user_param, &ea->displacement)) {
+					uint32_t disp = 0;
+					if (!fetch_dword(user_param, &disp)) {
 						return 0;
 					}
-					ea->logical_address.offset = ea->displacement;
+					ea->logical_address.offset = disp;
 					return 1;
 				}
 				else {
@@ -8016,143 +8008,109 @@ int i80386_modrm_get_offset(const I80386* cpu, uint8_t address_size, I80386_MOD_
 			else {
 				if (modrm.rm == 0b110) {
 					/* [disp16] */
-					uint16_t disp16 = 0;
-					if (!fetch_word(user_param, &disp16)) {
+					uint16_t disp = 0;
+					if (!fetch_word(user_param, &disp)) {
 						return 0;
 					}
-					ea->displacement = disp16;
-					ea->logical_address.offset = disp16;
+					ea->logical_address.offset = disp;
 					return 1;
 				}
 				else {
 					/* [base16] */
 					uint16_t base = modrm_get_base_offset(cpu, modrm);
-					ea->base = base;
-					ea->logical_address.offset = base & 0xFFFF;
+					ea->logical_address.offset = base;
 					return 1;
 				}
 			}
 
 		case 0b01: {
+			uint8_t disp = 0;
+			if (!fetch_byte(user_param, &disp)) {
+				return 0;
+			}
+
 			if (address_size) {
 				if (modrm.rm == 0b100) {
 					/* [SIB + disp8] */
 					if (sib.index == 0b100) {
 	#ifdef _386_SIB_UNDEFINED_
-						/* [base * scale + disp8] - scale!=b00 && index=0b100 is undefined on 386 */
-						uint8_t disp8 = 0;
-						if (!fetch_byte(user_param, &disp8)) {
-							return 0;
-						}
-						ea->base = reg32_read(cpu, sib.base);
-						ea->scale = sib.scale;
-						ea->displacement = disp8;
-						ea->logical_address.offset = (ea->base << ea->scale) + (int8_t)disp8;
+						/* [base * scale + disp8] - scale!=b00 && index==0b100 is undefined on i80386 */
+						uint32_t base = reg32_read(cpu, sib.base);
+						ea->logical_address.offset = (base << sib.scale) + (int8_t)disp;
 	#else
 						/* [base + disp8] */
-						uint8_t disp8 = 0;
-						if (!fetch_byte(user_param, &disp8)) {
-							return 0;
-						}
-						ea->base = reg32_read(cpu, sib.base);
-						ea->displacement = disp8;
-						ea->logical_address.offset = ea->base + (int8_t)disp8;
+						uint32_t base = reg32_read(cpu, sib.base);
+						ea->logical_address.offset = base + (int8_t)disp;
 	#endif
 						return 1;
 					}
 					else {
 						/* [base + index * scale + disp8] */
-						uint8_t disp8 = 0;
-						if (!fetch_byte(user_param, &disp8)) {
-							return 0;
-						}
-						ea->base = reg32_read(cpu, sib.base);
-						ea->index = reg32_read(cpu, sib.index);
-						ea->scale = sib.scale;
-						ea->displacement = disp8;
-						ea->logical_address.offset = ea->base + (ea->index << ea->scale) + (int8_t)disp8;
+						uint32_t base = reg32_read(cpu, sib.base);
+						uint32_t index = reg32_read(cpu, sib.index);
+						ea->logical_address.offset = base + (index << sib.scale) + (int8_t)disp;
 						return 1;
 					}
 				}
 				else {
 					/* [reg32 + disp8] */
-					uint8_t disp8 = 0;
-					if (!fetch_byte(user_param, &disp8)) {
-						return 0;
-					}
-					ea->base = reg32_read(cpu, modrm.rm);
-					ea->displacement = disp8;
-					ea->logical_address.offset = (ea->base + (int8_t)disp8) & 0xFFFFFFFF;
+					uint32_t base = reg32_read(cpu, modrm.rm);
+					ea->logical_address.offset = (base + (int8_t)disp) & 0xFFFFFFFF;
 					return 1;
 				}
 			}
 			else {
 				/* [base16 + disp8] */
-				uint8_t disp8 = 0;
-				if (!fetch_byte(user_param, &disp8)) {
-					return 0;
-				}
-				ea->base = modrm_get_base_offset(cpu, modrm);
-				ea->displacement = disp8;
-				ea->logical_address.offset = (ea->base + (int8_t)disp8) & 0xFFFF;
+				uint32_t base = modrm_get_base_offset(cpu, modrm);
+				ea->logical_address.offset = (base + (int8_t)disp) & 0xFFFF;
 				return 1;
 			}
 		}
 
 		case 0b10: {
 			if (address_size) {
+				uint32_t disp = 0;
+				if (!fetch_dword(user_param, &disp)) {
+					return 0;
+				}
+
 				if (modrm.rm == 0b100) {
 					/* [SIB + disp32] */
 					if (sib.index == 0b100) {
 	#ifdef _386_SIB_UNDEFINED_
-						/* [base * scale + disp32] - scale!=b00 && index=0b100 is undefined on 386 */
-						if (!fetch_dword(user_param, &ea->displacement)) {
-							return 0;
-						}
-						ea->base = reg32_read(cpu, sib.base);
-						ea->scale = sib.scale;
-						ea->logical_address.offset = (ea->base << ea->scale) + (int32_t)ea->displacement;
+						/* [base * scale + disp32] - scale!=b00 && index==0b100 is undefined on 386 */
+						uint32_t base = reg32_read(cpu, sib.base);
+						ea->logical_address.offset = (base << sib.scale) + (int32_t)disp;
 	#else
 						/* [base + disp32] */
-						if (!fetch_dword(user_param, &ea->displacement)) {
-							return 0;
-						}
-						ea->base = reg32_read(cpu, sib.base);
-						ea->logical_address.offset = ea->base + (int32_t)ea->displacement;
+						uint32_t base = reg32_read(cpu, sib.base);
+						ea->logical_address.offset = base + (int32_t)disp;
 	#endif
 						return 1;
 					}
 					else {
-						/* [index * scale + base + disp32] */
-						if (!fetch_dword(user_param, &ea->displacement)) {
-							return 0;
-						}
-						ea->base = reg32_read(cpu, sib.base);
-						ea->index = reg32_read(cpu, sib.index);
-						ea->scale = sib.scale;
-						ea->logical_address.offset = (ea->index << ea->scale) + ea->base + (int32_t)ea->displacement;
+						/* [base + index * scale + disp32] */
+						uint32_t base = reg32_read(cpu, sib.base);
+						uint32_t index = reg32_read(cpu, sib.index);
+						ea->logical_address.offset = base + (index << sib.scale) + (int32_t)disp;
 						return 1;
 					}
 				}
 				else {
 					/* [reg32 + disp32] */
-					if (!fetch_dword(user_param, (uint32_t*)&ea->displacement)) {
-						return 0;
-					}
-					ea->base = reg32_read(cpu, modrm.rm);
-					ea->logical_address.offset = (ea->base + (int32_t)ea->displacement) & 0xFFFFFFFF;
+					uint32_t base = reg32_read(cpu, modrm.rm);
+					ea->logical_address.offset = (base + (int32_t)disp) & 0xFFFFFFFF;
 					return 1;
 				}
 			}
 			else {
 				/* [base16 + disp16] */
-				uint16_t disp16 = 0;
-				if (!fetch_word(user_param, &disp16)) {
+				uint16_t disp = 0;
+				if (!fetch_word(user_param, &disp)) {
 					return 0;
 				}
-				ea->displacement = disp16;
-				ea->base = modrm_get_base_offset(cpu, modrm);
-				ea->logical_address.offset = (ea->base + (int16_t)disp16) & 0xFFFF;
+				uint32_t base = modrm_get_base_offset(cpu, modrm);
+				ea->logical_address.offset = (base + (int16_t)disp) & 0xFFFF;
 				return 1;
 			}
 		}

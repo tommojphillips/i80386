@@ -429,10 +429,6 @@ typedef struct I80386_LOGICAL_ADDRESS {
 
 typedef struct I80386_EFFECTIVE_ADDRESS {
 	I80386_LOGICAL_ADDRESS logical_address;
-	uint32_t displacement;
-	uint32_t base;
-	uint32_t index;
-	uint8_t scale;
 	uint8_t segment_index;
 	uint8_t stack_address;
 	uint8_t valid;
