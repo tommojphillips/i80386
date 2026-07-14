@@ -158,7 +158,7 @@ static int read_byte_logical(I80386* cpu, uint32_t base, uint32_t offset, uint8_
 	if (!i80386_address_translation(cpu, base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address);
+	read_byte_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_byte_logical(I80386* cpu, uint32_t base, uint32_t offset, uint8_t value) {
@@ -166,69 +166,64 @@ static int write_byte_logical(I80386* cpu, uint32_t base, uint32_t offset, uint8
 	if (!i80386_address_translation(cpu, base, offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value);
+	write_byte_physical(cpu, physical_address, value);
 	return 1;
 }
 static int read_byte_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint8_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 1)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[ea->segment_index].desc.base, ea->logical_address.offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address);
+	read_byte_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_byte_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint8_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 1)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[ea->segment_index].desc.base, ea->logical_address.offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value);
+	write_byte_physical(cpu, physical_address, value);
 	return 1;
 }
 static int read_byte_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint8_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, segment_index, offset, 1)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address);
+	read_byte_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_byte_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint8_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, segment_index, offset, 1)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value);
+	write_byte_physical(cpu, physical_address, value);
 	return 1;
 }
 static int fetch_byte(I80386* cpu, uint8_t* value) {
 	/* Code fetch 8bit byte */
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 1)) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
 		return 0;
 	}
@@ -239,8 +234,7 @@ static int fetch_byte(I80386* cpu, uint8_t* value) {
 		return 0;
 	}
 
-	*value = cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address);
-	
+	read_byte_physical(cpu, physical_address, value);
 	return 1;
 }
 
@@ -259,8 +253,7 @@ static int read_word_logical(I80386* cpu, uint32_t base, uint32_t offset, uint16
 	if (!i80386_address_translation(cpu, base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	read_word_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_word_logical(I80386* cpu, uint32_t base, uint32_t offset, uint16_t value) {
@@ -268,74 +261,64 @@ static int write_word_logical(I80386* cpu, uint32_t base, uint32_t offset, uint1
 	if (!i80386_address_translation(cpu, base, offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	write_word_physical(cpu, physical_address, value);
 	return 1;
 }
 static int read_word_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint16_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 2)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	read_word_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_word_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint16_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 2)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	write_word_physical(cpu, physical_address, value);
 	return 1;
 }
 static int read_word_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint16_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, segment_index, offset, 2)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint16_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	read_word_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_word_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint16_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, segment_index, offset, 2)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	write_word_physical(cpu, physical_address, value);
 	return 1;
 }
 static int fetch_word(I80386* cpu, uint16_t* value) {
 	/* Code fetch 16bit word */
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 2)) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
 		return 0;
 	}
@@ -346,127 +329,96 @@ static int fetch_word(I80386* cpu, uint16_t* value) {
 		return 0;
 	}
 
-	*value = ((uint16_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint16_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8);
+	read_word_physical(cpu, physical_address, value);
 	return 1;	
 }
 
 /* 32 bit memory r/w */
 
-static void read_dword_physical(const I80386* cpu, uint32_t address, uint32_t* value) {
-	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, address)                  |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 1) << 8)  |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 2) << 16) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, address + 3) << 24);
+static void read_dword_physical(const I80386* cpu, uint32_t physical_address, uint32_t* value) {
+	*value = cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)                  |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8)  |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
+		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
 }
-static void write_dword_physical(const I80386* cpu, uint32_t address, uint32_t value) {
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 1, (value >> 8) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 2, (value >> 16) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 3, (value >> 24) & 0xFF);
+static void write_dword_physical(const I80386* cpu, uint32_t physical_address, uint32_t value) {
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
+	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
 }
 static int read_dword_logical(I80386* cpu, uint32_t base, uint32_t offset, uint32_t* value) {
-	if (offset > 0xFFFC) {
-		i80386_exception(cpu, cpu->effective_address.stack_address ? EXCEPTION_SS : EXCEPTION_GP);
-		return 0;
-	}
 	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	read_dword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_dword_logical(I80386* cpu, uint32_t base, uint32_t offset, uint32_t value) {
-	if (offset > 0xFFFC) {
-		i80386_exception(cpu, cpu->effective_address.stack_address ? EXCEPTION_SS : EXCEPTION_GP);
-		return 0;
-	}
 	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, base, offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	write_dword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int read_dword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint32_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 4)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	read_dword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_dword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint32_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 4)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	write_dword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int read_dword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint32_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, segment_index, offset, 4)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
-		((uint32_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	read_dword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_dword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint32_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, segment_index, offset, 4)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
+	write_dword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int fetch_dword(I80386* cpu, uint32_t* value) {
 	/* Code fetch 32bit dword */
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 4)) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return 0;
 	}
 
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
 		return 0;
 	}
@@ -477,10 +429,7 @@ static int fetch_dword(I80386* cpu, uint32_t* value) {
 		return 0;
 	}
 
-	*value = ((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8) |
-		((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
-		((uint32_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24);
+	read_dword_physical(cpu, physical_address, value);
 	return 1;
 }
 
@@ -506,94 +455,77 @@ static void write_qword_physical(const I80386* cpu, uint32_t address, uint64_t v
 	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 6, (value >> 48) & 0xFF);
 	cpu->funcs.write_mem_byte(cpu->funcs.user_param, address + 7, (value >> 56) & 0xFF);
 }
+static int read_qword_logical(I80386* cpu, uint32_t base, uint32_t offset, uint64_t* value) {
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 0, &physical_address)) {
+		return 0;
+	}
+	read_qword_physical(cpu, physical_address, value);
+	return 1;
+}
+static int write_qword_logical(I80386* cpu, uint32_t base, uint32_t offset, uint64_t value) {
+	uint32_t physical_address = 0;
+	if (!i80386_address_translation(cpu, base, offset, 1, &physical_address)) {
+		return 0;
+	}
+	write_qword_physical(cpu, physical_address, value);
+	return 1;
+}
 static int read_qword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint64_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, ea->segment_index, ea->logical_address.offset, 8)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 4) << 32) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 5) << 40) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 6) << 48) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 7) << 56);
+	read_qword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_qword_ea(I80386* cpu, const I80386_EFFECTIVE_ADDRESS* ea, uint64_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, ea->segment_index, ea->logical_address.offset, 8)) {
 		i80386_exception(cpu, ea->stack_address ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, ea->logical_address.base, ea->logical_address.offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 4, (value >> 32) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 5, (value >> 40) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 6, (value >> 48) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 7, (value >> 56) & 0xFF);
+	write_qword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int read_qword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint64_t* value) {
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, segment_index, offset, 8)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 0, &physical_address)) {
 		return 0;
 	}
-	*value = ((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 1) <<  8) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 4) << 32) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 5) << 40) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 6) << 48) |
-		((uint64_t)cpu->funcs.read_mem_byte(cpu->funcs.user_param, physical_address + 7) << 56);
+	read_qword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int write_qword_sreg(I80386* cpu, uint8_t segment_index, uint32_t offset, uint64_t value) {
+	uint32_t physical_address = 0;
 	if (!segment_write_check(cpu, segment_index, offset, 8)) {
 		i80386_exception(cpu, cpu->effective_address.stack_address || segment_index == SEG_SS ? EXCEPTION_SS : EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->segment_registers[segment_index].desc.base, offset, 1, &physical_address)) {
 		return 0;
 	}
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address, value & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 1, (value >> 8) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 2, (value >> 16) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 3, (value >> 24) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 4, (value >> 32) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 5, (value >> 40) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 6, (value >> 48) & 0xFF);
-	cpu->funcs.write_mem_byte(cpu->funcs.user_param, physical_address + 7, (value >> 56) & 0xFF);
+	write_qword_physical(cpu, physical_address, value);
 	return 1;
 }
 static int fetch_qword(I80386* cpu, uint64_t* value) {
 	/* Code fetch 64bit qword */
+	uint32_t physical_address = 0;
 	if (!segment_read_check(cpu, SEG_CS, cpu->eip, 8)) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return 0;
 	}
-
-	uint32_t physical_address = 0;
 	if (!i80386_address_translation(cpu, cpu->cs.desc.base, cpu->eip, 0, &physical_address)) {
 		return 0;
 	}
@@ -604,14 +536,7 @@ static int fetch_qword(I80386* cpu, uint64_t* value) {
 		return 0;
 	}
 
-	*value = ((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address)) |
-		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 1) << 8) |
-		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 2) << 16) |
-		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 3) << 24) |
-		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 4) << 32) |
-		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 5) << 40) |
-		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 6) << 48) |
-		((uint64_t)cpu->funcs.exe_mem_byte(cpu->funcs.user_param, physical_address + 7) << 56);	
+	read_qword_physical(cpu, physical_address, value);
 	return 1;
 }
 
