@@ -251,6 +251,7 @@ typedef struct I80386_DR7 {
 	};
 } I80386_DR7;
 
+/* i80386 Task switch reason */
 typedef enum I80386_TASK_SWITCH_REASON {
 	TASK_SWITCH_CALL,
 	TASK_SWITCH_JMP,
@@ -258,6 +259,7 @@ typedef enum I80386_TASK_SWITCH_REASON {
 	TASK_SWITCH_IRET
 } I80386_TASK_SWITCH_REASON;
 
+/* i80386 Task state segment */
 typedef struct I80386_TASK_STATE_SEGMENT {
 	union {
 		uint32_t values[26];
@@ -303,7 +305,7 @@ typedef struct I80386_TASK_STATE_SEGMENT {
 	};
 } I80386_TASK_STATE_SEGMENT;
 
-/* 32bit register */
+/* i80386 32bit GPR */
 typedef struct I80386_REG32 {
 	union {
 		uint32_t r32;
@@ -315,7 +317,7 @@ typedef struct I80386_REG32 {
 	};
 } I80386_REG32;
 
-/* 8bit Mod R/M byte */
+/* i80386 Mod R/M */
 typedef struct I80386_MOD_RM {
 	union {
 		uint8_t byte;
@@ -327,7 +329,7 @@ typedef struct I80386_MOD_RM {
 	};
 } I80386_MOD_RM;
 
-/* 8bit SIB byte */
+/* i80386 SIB */
 typedef struct I80386_SIB {
 	union {
 		uint8_t byte;
@@ -339,6 +341,7 @@ typedef struct I80386_SIB {
 	};
 } I80386_SIB;
 
+/* i80386 Descriptor access rights */
 #pragma pack(push, 1)
 typedef struct I80386_DESCRIPTOR_ACCESS_RIGHTS {
 	union {
@@ -380,6 +383,7 @@ typedef struct I80386_DESCRIPTOR_ACCESS_RIGHTS {
 } I80386_DESCRIPTOR_ACCESS_RIGHTS;
 #pragma pack(pop)
 
+/* i80386 descriptor table entry */
 typedef struct I80386_DESCRIPTOR_TABLE_ENTRY {
 	union {
 		uint64_t qword;
@@ -394,17 +398,20 @@ typedef struct I80386_DESCRIPTOR_TABLE_ENTRY {
 	};
 } I80386_DESCRIPTOR_TABLE_ENTRY;
 
+/* i80386 Descriptor table register */
 typedef struct I80386_DESCRIPTOR_TABLE_REGISTER {
 	uint32_t base;  /* base */
 	uint32_t limit; /* limit */
 } I80386_DESCRIPTOR_TABLE_REGISTER;
 
+/* i80386 Descriptor cache register */
 typedef struct I80386_DESCRIPTOR_CACHE {	
 	I80386_DESCRIPTOR_ACCESS_RIGHTS ar;
 	uint32_t base;                  /* base */
 	uint32_t limit;                 /* limit */
 } I80386_DESCRIPTOR_CACHE;
 
+/* i80386 Segment register */
 typedef struct I80386_SEGMENT_REGISTER {
 	uint16_t selector;            /* visible selector */		
 	I80386_DESCRIPTOR_CACHE desc; /* invisible portion */
@@ -429,11 +436,13 @@ typedef struct I80386_FUNCS {
 	void* user_param;                        /* user parameter passed to function/s */
 } I80386_FUNCS;
 
+/* i80386 Logical Address */
 typedef struct I80386_LOGICAL_ADDRESS {
 	uint32_t base;
 	uint32_t offset;
 } I80386_LOGICAL_ADDRESS;
 
+/* i80386 Effective Address */
 typedef struct I80386_EFFECTIVE_ADDRESS {
 	I80386_LOGICAL_ADDRESS logical_address;
 	uint8_t segment_index;
@@ -441,6 +450,7 @@ typedef struct I80386_EFFECTIVE_ADDRESS {
 	uint8_t valid;
 } I80386_EFFECTIVE_ADDRESS;
 
+/* i80386 Linear Address */
 typedef struct I80386_LINEAR_ADDRESS {
 	union {
 		uint32_t dword;
@@ -452,7 +462,7 @@ typedef struct I80386_LINEAR_ADDRESS {
 	};
 } I80386_LINEAR_ADDRESS;
 
-/* Translation Page Table Entry */
+/* i80386 Translation Page Table Entry */
 typedef struct I80386_PAGE_TABLE_ENTRY {
 	union {
 		uint32_t dword;
@@ -474,7 +484,7 @@ typedef struct I80386_PAGE_TABLE_ENTRY {
 
 #define I80386_TLB_SIZE 64
 
-/* Translation Lookaside Buffer Entry */
+/* i80386 Translation Lookaside Buffer Entry */
 typedef struct I80386_TLB_ENTRY {
 	uint32_t linear_page;
 	uint32_t physical_page;
@@ -488,7 +498,7 @@ typedef struct I80386_TLB_ENTRY {
 	};
 } I80386_TLB_ENTRY;
 
-/* Translation Lookaside Buffer */
+/* i80386 Translation Lookaside Buffer */
 typedef struct I80386_TLB {
 	int count;
 	int index;
@@ -511,6 +521,7 @@ typedef struct I80386_TLB {
 #define I80386_INTERRUPT_TYPE_SOFTWARE 0x1
 #define I80386_INTERRUPT_TYPE_HARDWARE 0x2
 
+/*  i80386 Gate */
 typedef struct I80386_GATE {
 	union {
 		uint64_t qword;
@@ -547,7 +558,7 @@ typedef struct I80386_GATE {
 #define	OPERAND_SIZE_DWORD  4
 #define	OPERAND_SIZE_QWORD  8
 
-/* r/m operand */
+/* i80386 Operand */
 typedef struct I80386_OPERAND {
 	uint8_t type;
 	uint8_t size;
@@ -797,63 +808,119 @@ static_assert(sizeof(I80386_LOADALL) == 208, "Struct: I80386_LOADALL not 208 byt
 extern "C" {
 #endif
 
-/* Initialize the CPU. Sets all function pointers to NULL
-	cpu: the cpu instance */
+/* Initialize CPU. Sets all function pointers to NULL
+ cpu: Cpu instance */
 void i80386_init(I80386* cpu);
 
-/* Reset The CPU to it's reset state.
-	cpu: the cpu instance */
+/* Reset CPU to it's reset state.
+ cpu: Cpu instance */
 void i80386_reset(I80386* cpu);
 
-/* Fetch, Execute the next instruction
-	cpu: the cpu instance */
+/* Fetch, Decode and Execute the next instruction
+ cpu: Cpu instance */
 int i80386_execute(I80386* cpu);
 
-/* request hardware interrupt
-	cpu:  the cpu instance
-	type: the interrupt number 0-0xFF */
+/* Request hardware interrupt
+ cpu:  Cpu instance
+ type: Interrupt number (0x0 - 0xFF) */
 void i80386_intr(I80386* cpu, uint8_t type);
 
-/* request non maskable interrupt
-	cpu:  the cpu instance */
+/* Request non maskable interrupt
+ cpu:  Cpu instance */
 void i80386_nmi(I80386* cpu);
 
-/* Convert Logical Address to Physical Address  (base + offset) */
+/* Convert Logical Address to Physical Address  (base + offset) 
+ base:   Base
+ offset: Offset */
 uint32_t i80386_get_physical_address_bo(uint32_t base, uint32_t offset);
 
-/* Convert Logical Address to Physical Address  ((selector << 4) + offset) */
+/* Convert Logical Address to Physical Address  ((selector << 4) + offset) 
+ selector: Selector
+ offset:   Offset */
 uint32_t i80386_get_physical_address_so(uint16_t selector, uint32_t offset);
 
-/* Get descriptor table entry - Returns 1 if success, otherwise 0 */
-int i80386_read_descriptor_table_entry(const I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry);
+/* Read local/global descriptor table entry pointed by selector - Returns 1 if success, otherwise 0
+ cpu:      Cpu instance
+ selector: Input selector
+ entry:    Output descriptor table entry */
+int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry);
 
-/* Set descriptor table entry - Returns 1 if success, otherwise 0 */
-int i80386_write_descriptor_table_entry(const I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry);
+/* Write local/global descriptor table entry pointed by selector - Returns 1 if success, otherwise 0
+ cpu:      Cpu instance
+ selector: Input selector
+ entry:    Input descriptor table entry */
+int i80386_write_descriptor_table_entry(I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry);
 
-/* Update segment descriptor cache */
+/* Update segment descriptor cache
+ entry: Input descriptor table entry
+ cache: Output descriptor cache */
 void i80386_update_segment_descriptor_cache(const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_DESCRIPTOR_CACHE* cache);
-/* Update system descriptor cache */
+
+/* Update system descriptor cache 
+ entry: Input descriptor table entry
+ cache: Output descriptor cache */
 void i80386_update_system_descriptor_cache(const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_DESCRIPTOR_CACHE* cache);
 
-/* Load segment descriptor cache */
+/* Load segment register 
+ cpu:        Cpu instance 
+ sreg:       the segment register
+ sreg_index: the segment index
+ selector:   the selector to load from */
 int i80386_load_segment_register(I80386* cpu, I80386_SEGMENT_REGISTER* sreg, int sreg_index, uint16_t selector);
 
-/* Copy segment descriptor */
+/* Copy segment descriptor 
+ src:  Source register  
+ dest: Dest register */
 void i80386_copy_segment_descriptor(I80386_SEGMENT_REGISTER* dest, const I80386_SEGMENT_REGISTER* src);
 
-/* Resolve base from segment selector */
-int i80386_resolve_segment_selector(const I80386* cpu, uint16_t selector, uint32_t* base);
+/* Resolve base from segment selector 
+ cpu:        Cpu instance 
+ selector:   Input selector
+ base:       Output resolved base */
+int i80386_resolve_segment_selector(I80386* cpu, uint16_t selector, uint32_t* base);
 
+/* Get Mod R/M segment 
+ cpu:               Cpu instance
+ address_size:      0=16bit; 1=32bit
+ modrm:             Mod R/M byte
+ sib:               SIB byte
+ effective_address: Output effective address
+ segment_prefix:    Segment prefix */
 int i80386_modrm_get_segment(const I80386* cpu, uint8_t address_size, I80386_MOD_RM modrm, I80386_SIB sib, I80386_EFFECTIVE_ADDRESS* effective_address,
 	uint8_t segment_prefix);
+
+/* Get Mod R/M offset 
+ cpu:               Cpu instance
+ address_size:      0=16bit; 1=32bit
+ modrm:             Mod R/M byte
+ sib:               SIB byte
+ effective_address: Output effective address
+ fetch_byte:        fetch byte function
+ fetch_word:        fetch word function
+ fetch_dword:       fetch dword function */
 int i80386_modrm_get_offset(const I80386* cpu, uint8_t address_size, I80386_MOD_RM modrm, I80386_SIB sib, I80386_EFFECTIVE_ADDRESS* effective_address,
 	I80386_FETCH_BYTE fetch_byte, I80386_FETCH_WORD fetch_word, I80386_FETCH_DWORD fetch_dword, void* user_param);
 
-/* Convert segmented address to a linear address */
+/* Convert segmented address to a linear address 
+ cpu:            Cpu instance
+ base:           Input base
+ offset:         Input offset
+ linear_address: Output linear address */
 int i80386_segment_translation(I80386* cpu, uint32_t base, uint32_t offset, uint32_t* linear_address);
-/* Convert a linear address to a physical address */
+
+/* Convert a linear (virtual) address to a physical address 
+ cpu:              Cpu instance  
+ linear_address:   Input linear address
+ is_write:         0=read; 1=write
+ physical_address: Output physical address */
 int i80386_page_translation(I80386* cpu, uint32_t linear_address, int is_write, uint32_t* physical_address);
-/* Convert segmented address to a physical address */
+
+/* Convert segmented address to a physical address 
+ cpu:              Cpu instance
+ base:             Input base
+ offset:           Input offset
+ is_write:         0=read; 1=write
+ physical_address: Output physical address */
 int i80386_address_translation(I80386* cpu, uint32_t base, uint32_t offset, int is_write, uint32_t* physical_address);
 
 #ifdef __cplusplus
