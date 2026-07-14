@@ -2959,23 +2959,38 @@ static void popa(I80386* cpu) {
 	}	
 }
 static void push_imm(I80386* cpu) {
-	/* Push immediate value - Push Iw - (68/6A) b011010S0 */
+	/* Push immediate value - Push Ib/Iv - (68/6A) b011010S0 */
 
 	if (S) { /* sign extended to 16bit */
 		uint8_t imm = 0;
 		if (!fetch_byte(cpu, &imm)) {
 			return;
 		}
+		if (cpu->operand_size) {
+			uint32_t se = sign_extend8_32(imm);
+			push_dword(cpu, se);
+		}
+		else {
 		uint16_t se = sign_extend8_16(imm);
 		push_word(cpu, se);
 	}
+	}
 	else {
+		if (cpu->operand_size) {
+			uint32_t imm = 0;
+			if (!fetch_dword(cpu, &imm)) {
+				return;
+			}
+			push_dword(cpu, imm);
+		}
+		else {
 		uint16_t imm = 0;
 		if (!fetch_word(cpu, &imm)) {
 			return;
 		}
 		push_word(cpu, imm);
 	}
+}
 }
 
 static void enter(I80386* cpu) {
