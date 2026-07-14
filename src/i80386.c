@@ -1676,50 +1676,184 @@ static int stack_peek_dword(I80386* cpu, int i, uint32_t* value) {
 }
 
 /* Gate functions */
+static int i80386_stack_switch(I80386* cpu, int dpl, int param_count, uint8_t type, I80386_SEGMENT_REGISTER* new_ss, uint32_t* new_esp) {
+	/* switch stacks */
+	uint16_t old_selector = cpu->ss.selector;
+	uint32_t old_base = cpu->ss.desc.base;
+	uint32_t old_esp = cpu->esp;
 
-static int i80386_int_gate(I80386* cpu, uint8_t vector, int interrupt_type, I80386_GATE* gate) {
-	I80386_GATE idt_gate = { 0 };
-	uint16_t offset = 0;
-
-	offset = (uint16_t)vector << 3;
-	if (offset + 7U > cpu->idtr.limit) {
-		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+	if ((cpu->tss.stacks[dpl].ss & 0xFFF8) == 0) {
+		i80386_exception_code(cpu, EXCEPTION_SS, 0);
 		return 0;
 	}
 
-	read_qword_physical(cpu, cpu->idtr.base + offset, &idt_gate.qword);
-
-	if (idt_gate.present == 0) {
-		i80386_exception_code(cpu, EXCEPTION_NP, idt_gate.selector);
+	if (!i80386_load_segment_register(cpu, new_ss, SEG_SS, cpu->tss.stacks[dpl].ss)) {
 		return 0;
 	}
+	*new_esp = cpu->tss.stacks[dpl].esp;
 
-	/* Hardware interrupts ignore gate DPL */
-	if (interrupt_type == I80386_INTERRUPT_TYPE_SOFTWARE && cpu->cpl > gate->dpl) {
-		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+	cpu->effective_address.stack_address = 1;
+
+	switch (type) {
+		case I80386_GATE_TYPE_CALL_286:
+			*new_esp = (*new_esp) - 2;
+			if (!write_word_logical(cpu, new_ss->desc.base, *new_esp, old_selector)) {
 		return 0;
 	}
-
-	/* Only TASK, INT or TRAP gates are allowed */
-	if (idt_gate.type != I80386_GATE_TYPE_TASK &&
-		idt_gate.type != I80386_GATE_TYPE_INT_286 &&
-		idt_gate.type != I80386_GATE_TYPE_TRAP_286 &&
-		idt_gate.type != I80386_GATE_TYPE_INT_386 &&
-		idt_gate.type != I80386_GATE_TYPE_TRAP_386) {
-		i80386_exception_code(cpu, EXCEPTION_GP, 0);
-		return 0;
+			*new_esp = (*new_esp) - 2;
+			if (!write_word_logical(cpu, new_ss->desc.base, *new_esp, old_esp & 0xFFFF)) {
+				return 0;
+			}
+			if (param_count > 0) {
+				for (int i = param_count - 1; i >= 0; --i) {
+					uint16_t v = 0;
+					if (!read_word_logical(cpu, old_base, old_esp + (i * 2), &v)) {
+						return 0;
+					}
+					*new_esp = (*new_esp) - 2;
+					if (!write_word_logical(cpu, new_ss->desc.base, *new_esp, v)) {
+						return 0;
+					}
+				}
+			}
+			break;
+		case I80386_GATE_TYPE_CALL_386:
+			*new_esp = (*new_esp) - 4;
+			if (!write_word_logical(cpu, new_ss->desc.base, *new_esp, old_selector)) {
+				return 0;
+			}
+			*new_esp = (*new_esp) - 4;
+			if (!write_dword_logical(cpu, new_ss->desc.base, *new_esp, old_esp)) {
+				return 0;
+			}
+			if (param_count > 0) {
+				for (int i = param_count - 1; i >= 0; --i) {
+					uint32_t v = 0;
+					if (!read_dword_logical(cpu, old_base, old_esp + (i * 4), &v)) {
+						return 0;
+					}
+					*new_esp = (*new_esp) - 4;
+					if (!write_dword_logical(cpu, new_ss->desc.base, *new_esp, v)) {
+						return 0;
+					}
+				}
+			}
+			break;
 	}
-
-	gate->offset_lo = idt_gate.offset_lo | ((uint32_t)idt_gate.offset_hi << 16);
-	gate->offset_hi = idt_gate.offset_hi;
-	gate->selector = idt_gate.selector;
-	gate->access = idt_gate.access;
 	return 1;
 }
-static int i80386_call_gate(I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
+static int i80386_int_gate(I80386* cpu, const I80386_GATE* gate, int interrupt_type) {
+	I80386_DESCRIPTOR_TABLE_ENTRY target = { 0 };
+	uint8_t rpl = 0;
+	uint8_t cpl = 0;
+	uint32_t final_esp = cpu->esp;
+	I80386_SEGMENT_REGISTER sreg = { 0 };
+
+	if (gate->present == 0) {
+		i80386_exception_code(cpu, EXCEPTION_NP, gate->selector);
+		return 0;
+	}
+	
+	if ((gate->selector & 0xFFF8) == 0) {
+		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+		return 0;
+	}
+
+	rpl = gate->selector & 3;
+	cpl = cpu->cpl > rpl ? cpu->cpl : rpl;
+
+	/* Hardware interrupts ignore gate DPL */
+	if (interrupt_type == I80386_INTERRUPT_TYPE_SOFTWARE && cpl > gate->dpl) {
+		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+		return 0;
+	}
+
+	if (!i80386_read_descriptor_table_entry(cpu, gate->selector, &target)) {
+		return 0;
+	}
+	if (!target.ar.present) {
+		i80386_exception_code(cpu, EXCEPTION_NP, gate->selector);
+		return 0;
+	}
+	if (!target.ar.s) {
+		i80386_exception_code(cpu, EXCEPTION_GP, gate->selector);
+		return 0;
+	}
+	if (!target.ar.e) {
+		i80386_exception_code(cpu, EXCEPTION_GP, gate->selector);
+		return 0;
+	}
+
+	if (target.ar.dpl < cpl) {
+		/* switch stacks */
+		if (!i80386_stack_switch(cpu, target.ar.dpl, 0, gate->type, &sreg, &final_esp)) {
+			return 0;
+		}
+	}
+	else {
+		i80386_copy_segment_descriptor(&sreg, &cpu->ss);
+	}
+
+	/* Push frame */
+	if (gate->type == I80386_GATE_TYPE_INT_286 || gate->type == I80386_GATE_TYPE_TRAP_286) {
+		final_esp -= 2;
+		if (!write_word_logical(cpu, sreg.desc.base, final_esp, cpu->psw.word)) {
+			return 0;
+		}
+		final_esp -= 2;
+		if (!write_word_logical(cpu, sreg.desc.base, final_esp, cpu->cs.selector)) {
+			return 0;
+		}
+		if (!push_word_at(cpu, &final_esp, cpu->ip)) {
+			return 0;
+		}
+	}
+	else if (gate->type == I80386_GATE_TYPE_INT_386 || gate->type == I80386_GATE_TYPE_TRAP_386) {
+		final_esp -= 4;
+		if (!write_dword_logical(cpu, sreg.desc.base, final_esp, cpu->eflags.dword)) {
+			return 0;
+		}
+		final_esp -= 4;
+		if (!write_dword_logical(cpu, sreg.desc.base, final_esp, cpu->cs.selector)) {
+			return 0;
+		}
+		if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
+			return 0;
+		}
+	}
+
+	/* commit register values */
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, gate->selector)) {
+		return 0;
+	}
+	if (target.ar.dpl < cpl) {
+		i80386_copy_segment_descriptor(&cpu->ss, &sreg);
+	}
+	if (gate->type == I80386_GATE_TYPE_INT_286 || gate->type == I80386_GATE_TYPE_TRAP_286) {
+		cpu->esp = final_esp & 0xFFFF;
+		cpu->eip = gate->offset_lo; /* clear upper 16bits */
+	}
+	else if (gate->type == I80386_GATE_TYPE_INT_386 || gate->type == I80386_GATE_TYPE_TRAP_386) {
+		cpu->esp = final_esp;
+		cpu->eip = gate->offset_lo | gate->offset_hi << 16;
+	}
+
+	/* clear if/tf flags */
+	cpu->psw.tf = 0;
+	if (gate->type == I80386_GATE_TYPE_INT_286 || gate->type == I80386_GATE_TYPE_INT_386) {
+		cpu->psw.in = 0;
+	}
+	cpu->halt = 0; /* int clears hlt state */
+
+	return 1;
+}
+static int i80386_call_gate(I80386* cpu, const I80386_DESCRIPTOR_TABLE_ENTRY* entry, uint16_t selector) {
 	I80386_GATE call_gate = { 0 };
 	uint8_t rpl = selector & 3;
 	uint8_t cpl = cpu->cpl > rpl ? cpu->cpl : rpl;
+	I80386_DESCRIPTOR_TABLE_ENTRY target = { 0 };
+	uint32_t new_esp = 0;
+	I80386_SEGMENT_REGISTER sreg = { 0 };
 
 	call_gate.qword = entry->qword;
 
@@ -1733,18 +1867,77 @@ static int i80386_call_gate(I80386* cpu, uint16_t selector, const I80386_DESCRIP
 		return 0;
 	}
 
-	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, call_gate.selector)) {
+	if ((call_gate.selector & 0xFFF8) == 0) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
 		return 0;
 	}
 
+	if (!i80386_read_descriptor_table_entry(cpu, call_gate.selector, &target)) {
+		return 0;
+	}
+	if (!target.ar.present) {
+		i80386_exception_code(cpu, EXCEPTION_NP, selector);
+		return 0;
+	}
+	if (!target.ar.s) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
+		return 0;
+	}
+	if (!target.ar.e) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
+		return 0;
+	}
+
+	if (target.ar.dpl < cpl) {
+		/* switch stacks */
+		if (!i80386_stack_switch(cpu, target.ar.dpl, call_gate.param_count, call_gate.type, &sreg, &new_esp)) {
+			return 0;
+		}
+	}
+	else {
+		new_esp = cpu->esp;
+	}
+
+	if (!push_word_align_at(cpu, &new_esp, cpu->cs.selector)) {
+		return 0;
+	}
+	if (!push_dword_at(cpu, &new_esp, cpu->eip)) {
+		return 0;
+	}
+
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, call_gate.selector)) {
+		return 0;
+	}
 	if (call_gate.type == I80386_GATE_TYPE_CALL_286) {
 		cpu->eip = call_gate.offset_lo; /* clear upper 16bits */
 	}
 	else if (call_gate.type == I80386_GATE_TYPE_CALL_386) {
-		cpu->eip = call_gate.offset_lo | call_gate.offset_hi << 16;
+		cpu->eip = call_gate.offset_lo | (call_gate.offset_hi << 16);
 	}
 
+	if (target.ar.dpl < cpl) {
+		i80386_copy_segment_descriptor(&cpu->ss, &sreg);
+	}
+	cpu->esp = new_esp;
+	cpu->cpl = target.ar.dpl;
 	return 1;
+}
+static int i80386_task_gate(I80386* cpu, const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_TASK_SWITCH_REASON reason) {
+	I80386_GATE gate = { 0 };
+
+	/* Vaildate TASK descriptor */
+	gate.qword = entry->qword;
+	if (!gate.present) {
+		i80386_exception_code(cpu, EXCEPTION_NP, gate.selector);
+		return 0;
+	}
+	if ((gate.selector & 0xFFF8) == 0) {
+		i80386_exception_code(cpu, EXCEPTION_GP, gate.selector);
+		return 0;
+	}
+
+	/* Task switch */
+	return i80386_task_switch(cpu, gate.selector, reason);
 }
 
 /* TLB functions */
@@ -1942,25 +2135,45 @@ static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH
 	I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
 	I80386_DESCRIPTOR_TABLE_ENTRY old_entry = { 0 };
 	I80386_DESCRIPTOR_CACHE cache = { 0 };
-	I80386_TASK_STATE_SEGMENT tss = { 0 };
+	I80386_TASK_STATE_SEGMENT old_tss = { 0 };
+	I80386_TASK_STATE_SEGMENT new_tss = { 0 };
 
-	/* task_validate_tss_descriptor */
-	if (selector == 0) {
+	/* task_validate_descriptor */
+	if ((selector & 0xFFF8) == 0) {
+		i80386_exception_code(cpu, EXCEPTION_TS, 0);
+		return 0;
+	}
+	if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+		return 0;
+	}
+	if (entry.ar.s) {
+		i80386_exception_code(cpu, EXCEPTION_TS, selector);
+		return 0;
+	}
+
+	/* task_validate_tr */
+	if ((cpu->tr.selector & 0xFFF8) == 0) {
 		i80386_exception_code(cpu, EXCEPTION_TS, 0);
 		return 0;
 	}
 	if (!i80386_read_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
-		i80386_exception_code(cpu, EXCEPTION_GP, selector);
 		return 0;
 	}
-	if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
-		i80386_exception_code(cpu, EXCEPTION_GP, selector);
+	if (old_entry.ar.s) {
+		i80386_exception_code(cpu, EXCEPTION_TS, selector);
 		return 0;
 	}
-	i80386_update_segment_descriptor_cache(&entry, &cache);
+
+	/* compute_cache */
+	i80386_update_system_descriptor_cache(&entry, &cache);
+
+	/* task_get_current_task */
+	if (!i80386_task_store_tss(cpu, &old_tss)) {
+		return 0;
+	}
 
 	/* task_save_current_task */
-	if (!i80386_task_write_tss(cpu, &cpu->tr.desc, &cpu->tss)) {
+	if (!i80386_task_write_tss(cpu, &cpu->tr.desc, &old_tss)) {
 		return 0;
 	}
 
@@ -1968,15 +2181,21 @@ static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH
 	switch (reason) {
 		case TASK_SWITCH_CALL:
 		case TASK_SWITCH_INT:
+			/* task_set_busy_bits */
 			i80386_task_set_busy(&entry);
-			write_word_physical(cpu, cache.base, cpu->tr.selector); /* back_link = tr */
+
+			/* task_write_back_descriptor */
+			write_word_logical(cpu, cache.base, 0, cpu->tr.selector); /* back_link = tr */
 			if (!i80386_write_descriptor_table_entry(cpu, selector, &entry)) {
 				return 0;
 			}
 			break;
 		case TASK_SWITCH_JMP:
+			/* task_set_busy_bits */
 			i80386_task_clear_busy(&old_entry);
 			i80386_task_set_busy(&entry);
+
+			/* task_write_back_descriptor */
 			if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
 				return 0;
 			}
@@ -1985,32 +2204,27 @@ static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH
 			}
 			break;
 		case TASK_SWITCH_IRET:
+			/* task_set_busy_bits */
 			i80386_task_clear_busy(&old_entry);
-			if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
-				return 0;
-			}
-			break;
-	}
 
 	/* task_write_back_descriptor */
 	if (!i80386_write_descriptor_table_entry(cpu, cpu->tr.selector, &old_entry)) {
 		return 0;
 	}
-	if (!i80386_write_descriptor_table_entry(cpu, selector, &entry)) {
+			break;
+	}
+
+	/* task_read_new_tss */
+	if (!i80386_task_read_tss(cpu, &cache, &new_tss)) {
 		return 0;
 	}
 
-	/* task_load_new_tss */
-	if (!i80386_task_read_tss(cpu, &cache, &tss)) {
-		return 0;
-	}
-
-	/* task_load_task_register */
+	/* task_load_tr */
 	cpu->tr.selector = selector;
 	i80386_update_system_descriptor_cache(&entry, &cpu->tr.desc);
 
-	/* task_load_cpu_from_tss */
-	if (!i80386_task_load_from_tss_image(cpu, &tss)) {
+	/* task_load_new_tss */
+	if (!i80386_task_load_tss(cpu, &new_tss)) {
 		return 0;
 	}
 
@@ -2021,7 +2235,7 @@ static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH
 	switch (reason) {
 		case TASK_SWITCH_CALL:
 		case TASK_SWITCH_INT:
-			cpu->eflags.psw.nt = 1;
+			cpu->psw.nt = 1;
 			break;
 		case TASK_SWITCH_JMP:
 			break;
@@ -2035,36 +2249,6 @@ static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH
 
 /* Interrupt functions */
 
-static int i80386_gate_interrupt(I80386* cpu, I80386_GATE gate) {
-	uint32_t final_esp = cpu->esp;
-
-	/* Push frame */
-	if (!push_word_at(cpu, &final_esp, cpu->psw.word)) {
-		return 0;
-	}
-	if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
-		return 0;
-	}
-	if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
-		return 0;
-	}
-
-	/* commit register values */
-	if (cpu->address_size) {
-		cpu->esp = final_esp;
-	}
-	else {
-		cpu->esp = final_esp & 0xFFFF;
-	}
-	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, gate.selector)) {
-		return 0;
-	}
-	cpu->eip = gate.offset_lo | (gate.offset_hi << 16);
-	cpu->psw.in = 0;
-	cpu->psw.tf = 0;
-	cpu->halt = 0;
-	return 1;
-}
 void i80386_intr(I80386* cpu, uint8_t vector) {
 	if (!cpu->intr) {
 		cpu->intr = 1;
@@ -2074,33 +2258,34 @@ void i80386_intr(I80386* cpu, uint8_t vector) {
 void i80386_nmi(I80386* cpu) {
 	cpu->nmi = 1;
 }
-int i80386_int(I80386* cpu, uint8_t vector, int interrupt_type) {
+void i80386_int(I80386* cpu, uint8_t vector, int interrupt_type) {
 	if (!cpu->msw.pe) {
 		/* Real mode */
 		uint16_t offset = 0;
 		uint16_t selector = 0;
 		uint32_t final_esp = cpu->esp;
 		uint32_t vector_offset = vector << 2;
+
 		if (vector_offset + 3U > cpu->idtr.limit) {
 			i80386_exception(cpu, EXCEPTION_GP);
-			return 0;
+			return;
 		}
 		if (!read_word_logical(cpu, cpu->idtr.base, vector_offset, &offset)) {
-			return 0;
+			return;
 		}
 		if (!read_word_logical(cpu, cpu->idtr.base, vector_offset + 2, &selector)) {
-			return 0;
+			return;
 		}
 
 		/* push frame */
 		if (!push_word_at(cpu, &final_esp, cpu->psw.word)) {
-			return 0;
+			return;
 		}
 		if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
-			return 0;
+			return;
 		}
 		if (!push_word_at(cpu, &final_esp, cpu->ip)) {
-			return 0;
+			return;
 		}
 
 		/* commit register values */
@@ -2111,39 +2296,44 @@ int i80386_int(I80386* cpu, uint8_t vector, int interrupt_type) {
 			cpu->esp = final_esp & 0xFFFF;
 		}
 		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-			return 0;
+			return;
 		}
 		cpu->eip = offset; /* clear upper 16bits */
 		cpu->psw.in = 0;
 		cpu->psw.tf = 0;
 		cpu->halt = 0;
 	}
-	else if (!cpu->eflags.vm) {
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
+		
+	}
+	else {
 		/* Protected mode */
+		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
 		I80386_GATE gate = { 0 };
-		if (!i80386_int_gate(cpu, vector, interrupt_type, &gate)) {
-			return 0;
+
+		if (!i80386_read_interrupt_table_entry(cpu, vector, &gate)) {
+			return;
 		}
+
+		entry.qword = gate.qword;
 
 		switch (gate.type) {
 			case I80386_GATE_TYPE_TASK:
-				i80386_task_switch(cpu, gate.selector, TASK_SWITCH_INT);
+				i80386_task_gate(cpu, &entry, TASK_SWITCH_INT);
 				break;
 			case I80386_GATE_TYPE_INT_286:
 			case I80386_GATE_TYPE_INT_386:
 			case I80386_GATE_TYPE_TRAP_286:
 			case I80386_GATE_TYPE_TRAP_386:
-				i80386_gate_interrupt(cpu, gate);
+				i80386_int_gate(cpu, &gate, interrupt_type);
 				break;
+			default:
+				i80386_exception_code(cpu, EXCEPTION_GP, 0);
+				return;
 		}		
 	}
-	else {
-		/* Virtual 8086 mode */
-		
 	}
-
-	return 1;
-}
 static int i80386_classify_exception(uint8_t exception) {
     switch (exception) {
         case EXCEPTION_TS:
@@ -3537,6 +3727,136 @@ static void jcxz(I80386* cpu) {
 	}
 }
 
+static void far_jmp_protected_mode(I80386* cpu, uint16_t selector, uint32_t offset) {
+	I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+
+	if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+		return;
+	}
+
+	if (entry.ar.s) {
+		/* Must be executable */
+		if (!entry.ar.e) {
+			i80386_exception_code(cpu, EXCEPTION_GP, selector);
+			return;
+		}
+
+		/* commit register values */
+		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+			return;
+		}
+		cpu->eip = offset;
+	}
+	else {
+		switch (entry.ar.type) {
+			case I80386_GATE_TYPE_AVAL_286:
+			case I80386_GATE_TYPE_AVAL_386:
+				i80386_task_switch(cpu, selector, TASK_SWITCH_JMP);
+				break;
+			case I80386_GATE_TYPE_TASK:
+				i80386_task_gate(cpu, &entry, TASK_SWITCH_JMP);
+				break;
+			default:
+				i80386_exception_code(cpu, EXCEPTION_GP, selector);
+				break;
+		}
+	}
+}
+static void far_jmp_real_mode(I80386* cpu, uint16_t selector, uint32_t offset) {
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+		return;
+	}
+	cpu->eip = offset;
+}
+static void far_call_protected_mode(I80386* cpu, uint16_t selector, uint32_t offset) {
+	I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
+	uint32_t final_esp = cpu->esp;
+
+	if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+		return;
+	}
+
+	if (entry.ar.s) {
+		/* Must be executable */
+		if (!entry.ar.e) {
+			i80386_exception_code(cpu, EXCEPTION_GP, selector);
+			return;
+		}
+
+		/* push frame */
+		if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
+			return;
+		}
+		if (cpu->operand_size) {
+			if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
+				return;
+			}
+		}
+		else {
+			if (!push_word_at(cpu, &final_esp, cpu->ip)) {
+				return;
+			}
+		}
+
+		/* commit register values */
+		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+			return;
+		}
+		cpu->eip = offset;
+
+		if (cpu->address_size) {
+			cpu->esp = final_esp;
+		}
+		else {
+			cpu->esp = final_esp & 0xFFFF;
+		}
+	}
+	else {
+		switch (entry.ar.type) {
+			case I80386_GATE_TYPE_CALL_286:
+			case I80386_GATE_TYPE_CALL_386:
+				i80386_call_gate(cpu, &entry, selector);				
+				break;
+			case I80386_GATE_TYPE_TASK:
+				i80386_task_gate(cpu, &entry, TASK_SWITCH_CALL);
+				break;
+			default:
+				i80386_exception_code(cpu, EXCEPTION_GP, selector);
+				break;
+		}
+	}
+}
+static void far_call_real_mode(I80386* cpu, uint16_t selector, uint32_t offset) {
+	uint32_t final_esp = cpu->esp;
+	if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
+		return;
+	}
+
+	if (cpu->operand_size) {
+		if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
+			return;
+		}
+	}
+	else {
+		if (!push_word_at(cpu, &final_esp, cpu->ip)) {
+			return;
+		}
+	}
+
+	/* commit register values */
+	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+		return;
+	}
+	cpu->eip = offset;
+
+	if (cpu->address_size) {
+		cpu->esp = final_esp;
+	}
+	else {
+		cpu->esp = final_esp & 0xFFFF;
+	}
+}
+
 static void jmp_intra_direct_short(I80386* cpu) {
 	/* jmp Jb - (EB) b11101011 */
 	uint8_t imm = 0;
@@ -3609,8 +3929,6 @@ static void jmp_intra_indirect(I80386* cpu) {
 }
 static void jmp_inter_direct(I80386* cpu) {
 	/* jmp Ap - (EA) b11101010 */
-	if (!cpu->msw.pe) {
-		/* Real mode */
 		uint32_t offset = 0;
 		uint16_t selector = 0;
 
@@ -3635,59 +3953,22 @@ static void jmp_inter_direct(I80386* cpu) {
 			return;
 		}
 
-		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-			return;
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		far_jmp_real_mode(cpu, selector, offset);
 		}
-		cpu->eip = offset;
-	}
 	else if (cpu->eflags.vm) {
 		/* Virtual 8086 mode */
 	}
 	else {
 		/* Protected mode */
-		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
-		uint32_t offset = 0;
-		uint16_t selector = 0;
-
-		if (cpu->operand_size) {
-			/* EA cp JMP ptr16:32 */
-			uint32_t imm = 0;
-			if (!fetch_dword(cpu, &imm)) {
-				return;
+		far_jmp_protected_mode(cpu, selector, offset);
 			}
-			offset = imm;
 		}
-		else {
-			/* EA cd JMP ptr16:16 */
-			uint16_t imm = 0;
-			if (!fetch_word(cpu, &imm)) {
-				return;
-			}
-			offset = imm;
-		}
-
-		if (!fetch_word(cpu, &selector)) {
-			return;
-		}
-
-		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
-			i80386_exception_code(cpu, EXCEPTION_GP, selector);
-			return;
-		}
-
-		if (entry.ar.s) {
-			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-				return;
-			}
-			cpu->eip = offset;
-		}
-		else {
-
-		}
-	}
-}
 static void jmp_inter_indirect(I80386* cpu) {
 	/* jmp Ep - (FF /5) b11111111 */
+	uint16_t selector = 0;
+	uint32_t offset = 0;
 
 	/* The mod R/M byte may refer only to memory */
 	if (cpu->modrm.mod == 0b11) {
@@ -3699,11 +3980,6 @@ static void jmp_inter_indirect(I80386* cpu) {
 		return;
 	}
 
-	if (!cpu->msw.pe) {
-		/* Real mode */
-		uint16_t selector = 0;
-		uint32_t offset = 0;
-
 		if (cpu->operand_size) {
 			/* FF /5 JMP m16:32 */
 			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
@@ -3723,50 +3999,18 @@ static void jmp_inter_indirect(I80386* cpu) {
 			return;
 		}
 
-		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-			return;
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		far_jmp_real_mode(cpu, selector, offset);
 		}
-		cpu->eip = offset;
-	}
 	else if (cpu->eflags.vm) {
 		/* Virtual 8086 mode */
 	}
 	else {
 		/* Protected mode */
-		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
-		uint16_t selector = 0;
-		uint32_t offset = 0;
-
-		if (cpu->operand_size) {
-			/* FF /5 JMP m16:32 */
-			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
-				return;
+		far_jmp_protected_mode(cpu, selector, offset);
 			}
-			cpu->effective_address.logical_address.offset += 4;
 		}
-		else {
-			/* FF /5 JMP m16:16 */
-			if (!read_word_ea(cpu, &cpu->effective_address, (uint16_t*)&offset)) {
-				return;
-			}
-			cpu->effective_address.logical_address.offset += 2;
-		}
-
-		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
-			return;
-		}
-
-		if (entry.ar.s) {
-			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-				return;
-			}
-			cpu->eip = offset;
-		}
-		else {
-
-		}
-	}	
-}
 
 static void call_intra_direct(I80386* cpu) {
 	/* Call Av - (E8) b11101000 */
@@ -3821,125 +4065,42 @@ static void call_intra_indirect(I80386* cpu) {
 }
 static void call_inter_direct(I80386* cpu) {
 	/* call Ap - (9A) b10011010 */
-
-	if (!cpu->msw.pe) {
-		/* Real mode */
-		uint32_t offset = 0;
 		uint16_t selector = 0;
+	uint32_t offset = 0;
 
 		if (cpu->operand_size) {
 			if (!fetch_dword(cpu, &offset)) {
 				return;
 			}
-			if (!fetch_word(cpu, &selector)) {
-				return;
 			}
-			if (!push_word(cpu, cpu->cs.selector)) {
-				return;
-			}
-			if (!push_dword(cpu, cpu->eip)) {
-				return;
-			}
-		}
 		else {
 			uint16_t imm = 0;
 			if (!fetch_word(cpu, &imm)) {
 				return;
 			}
-			if (!fetch_word(cpu, &selector)) {
-				return;
-			}
-			if (!push_word(cpu, cpu->cs.selector)) {
-				return;
-			}
-			if (!push_word(cpu, cpu->ip)) {
-				return;
-			}
 			offset = imm; /* clear upper 16bits */
 		}
 
-		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
+	if (!fetch_word(cpu, &selector)) {
 			return;
 		}
-		cpu->eip = offset;
+
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		far_call_real_mode(cpu, selector, offset);
 	}
 	else if (cpu->eflags.vm) {
 		/* Virtual 8086 mode */
 	}
 	else {
 		/* Protected mode */
-		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
-		uint16_t selector = 0;
-		uint32_t offset = 0;
-
-		if (cpu->operand_size) {
-			if (!fetch_dword(cpu, &offset)) {
-				return;
+		far_call_protected_mode(cpu, selector, offset);
 			}
 		}
-		else {
-			uint16_t imm = 0;
-			if (!fetch_word(cpu, &imm)) {
-				return;
-			}
-			offset = imm; /* clear upper 16bits */
-		}
-
-		if (!fetch_word(cpu, &selector)) {
-			return;
-		}
-
-		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
-			i80386_exception_code(cpu, EXCEPTION_GP, selector);
-			return;
-		}
-
-		if (entry.ar.s) {
-			if (!entry.ar.e) {
-				i80386_exception_code(cpu, EXCEPTION_GP, selector);
-				return;
-			}
-			if (!push_word(cpu, cpu->cs.selector)) {
-				return;
-			}
-			if (cpu->operand_size) {
-				if (!push_dword(cpu, cpu->eip)) {
-					return;
-				}
-			}
-			else {
-				if (!push_word(cpu, cpu->ip)) {
-					return;
-				}
-			}
-			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-				return;
-			}
-			cpu->eip = offset;
-		}
-		else {
-			switch (entry.ar.type) {
-				case I80386_GATE_TYPE_CALL_286:
-				case I80386_GATE_TYPE_CALL_386:
-					if (!i80386_call_gate(cpu, selector, &entry)) {
-						return;
-					}					
-					break;
-				case I80386_GATE_TYPE_TASK:
-					i80386_task_switch(cpu, selector, TASK_SWITCH_CALL);
-					return;
-				default:
-					i80386_exception_code(cpu, EXCEPTION_GP, selector);
-					return;
-			}
-		}
-	}	
-}
 static void call_inter_indirect(I80386* cpu) {
 	/* call Ep (FF /3) b11111111 */
 	uint16_t selector = 0;
 	uint32_t offset = 0;
-	uint32_t final_esp = cpu->esp;
 
 	/* lock raises #UD */
 	if (cpu->lock_prefix) {
@@ -3955,61 +4116,7 @@ static void call_inter_indirect(I80386* cpu) {
 
 	if (!modrm_get_effective_address(cpu, NULL)) {
 		return;
-	}
-
-	if (!cpu->msw.pe) {
-		/* Real mode */
-		if (cpu->operand_size) {
-			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
-				return;
-			}
-			cpu->effective_address.logical_address.offset += 4;
 		}
-		else {
-			uint16_t ip = 0;
-			if (!read_word_ea(cpu, &cpu->effective_address, &ip)) {
-				return;
-			}
-			offset = ip; /* clear upper 16bits */
-			cpu->effective_address.logical_address.offset += 2;
-		}
-
-		if (!read_word_ea(cpu, &cpu->effective_address, &selector)) {
-			return;
-		}
-		if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
-			return;
-		}
-
-		if (cpu->operand_size) {
-			if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
-				return;
-			}
-		}
-		else {
-			if (!push_word_at(cpu, &final_esp, cpu->ip)) {
-				return;
-			}
-		}
-
-		/* commit register values */
-		if (cpu->address_size) {
-			cpu->esp = final_esp;
-		}
-		else {
-			cpu->esp = final_esp & 0xFFFF;
-		}
-		if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-			return;
-		}
-		cpu->eip = offset;
-	}
-	else if (cpu->eflags.vm) {
-		/* Virtual 8086 mode */
-	}
-	else {
-		/* Protected mode */
-		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
 
 		if (cpu->operand_size) {
 			if (!read_dword_ea(cpu, &cpu->effective_address, &offset)) {
@@ -4030,70 +4137,18 @@ static void call_inter_indirect(I80386* cpu) {
 			return;
 		}
 
-		if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
-			i80386_exception_code(cpu, EXCEPTION_GP, selector);
-			return;
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		far_call_real_mode(cpu, selector, offset);
 		}
-
-		if (entry.ar.s) {
-			if (!push_word_at(cpu, &final_esp, cpu->cs.selector)) {
-				return;
-			}
-			if (cpu->operand_size) {
-				if (!push_dword_at(cpu, &final_esp, cpu->eip)) {
-					return;
-				}
+	else if (cpu->eflags.vm) {
+		/* Virtual 8086 mode */
 			}
 			else {
-				if (!push_word_at(cpu, &final_esp, cpu->ip)) {
-					return;
+		/* Protected mode */
+		far_call_protected_mode(cpu, selector, offset);
 				}
 			}
-
-			/* commit register values */
-			if (cpu->address_size) {
-				cpu->esp = final_esp;
-			}
-			else {
-				cpu->esp = final_esp & 0xFFFF;
-			}
-			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, selector)) {
-				return;
-			}
-			cpu->eip = offset;
-		}
-		else {
-			I80386_GATE gate = { 0 };
-			switch (entry.ar.type) {
-				case I80386_GATE_TYPE_CALL_286:
-				case I80386_GATE_TYPE_CALL_386:
-					if (!i80386_call_gate(cpu, selector, &entry)) {
-						return;
-					}
-					break;
-				case I80386_GATE_TYPE_TASK:
-					if (!i80386_task_switch(cpu, selector, TASK_SWITCH_CALL)) {
-						return;
-					}
-					break;
-				default:
-					i80386_exception_code(cpu, EXCEPTION_GP, selector);
-					return;
-			}
-
-			if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, gate.selector)) {
-				return;
-			}
-
-			if (entry.ar.type == I80386_GATE_TYPE_CALL_286) {
-				cpu->eip = gate.offset_lo; /* clear upper 16bits */
-			}
-			else if (entry.ar.type == I80386_GATE_TYPE_CALL_386) {
-				cpu->eip = gate.offset_lo | gate.offset_hi << 16;
-			}
-		}
-	}
-}
 
 static void ret_intra(I80386* cpu) {
 	/* ret/retd <Iw> (C2/C3) b1100001E */
