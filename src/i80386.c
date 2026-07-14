@@ -2745,6 +2745,7 @@ static void push_seg(I80386* cpu) {
 static void pop_seg(I80386* cpu) {
 	/* Pop SR (07/0F/17/1F/A1/A9) bX0ESRXXX */
 	uint8_t esr = ESR;
+	if (esr < I80386_SEGMENT_COUNT) {
 	uint16_t selector = 0;
 	if (!pop_word(cpu, &selector)) {
 		return;
@@ -2755,6 +2756,7 @@ static void pop_seg(I80386* cpu) {
 	if (esr == SEG_SS) {
 		cpu->int_delay = 1;
 	}
+}
 }
 static void push_reg(I80386* cpu) {
 	/* Push REG (50-57) b01010REG */
