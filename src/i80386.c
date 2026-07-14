@@ -5767,6 +5767,17 @@ static void iret(I80386* cpu) {
 	uint16_t ip = 0;
 	uint16_t cs = 0;
 	uint16_t psw = 0;
+	
+	if (cpu->psw.nt) {
+		/* Return from nested task */
+		uint16_t back_link = 0;
+		if (!read_word_logical(cpu, cpu->tr.desc.base, 0, &back_link)) {
+			return;
+		}
+		i80386_task_switch(cpu, back_link, TASK_SWITCH_IRET);
+		return;
+	}
+
 	if (!pop_word(cpu, &ip)) {
 		return;
 	}
