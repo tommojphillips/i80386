@@ -6,6 +6,11 @@
 #ifndef I80386_H
 #define I80386_H
 
+/* Enable undefined SIB byte behaviour on i80386EX. 
+	SIB is undefined when scale!=0b00 && index==0b100.
+	Base register incorrectly gets multiplied by 1, 2, 4 or 8. */
+#define _386_SIB_UNDEFINED_
+
 #include <stdint.h>
 
 #define REG_AL 0

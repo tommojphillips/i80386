@@ -12,8 +12,6 @@
 #define I80386_OPCODE cpu->opcode
 #include "opcode_bits.h"
 
-#define _386_SIB_UNDEFINED_
-
 /* Get default or override segment index */
 #define GET_SEG_OVERRIDE(seg) ((cpu->segment_override != 0xFF) ? cpu->segment_override : seg)
 
