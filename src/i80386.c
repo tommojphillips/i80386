@@ -6125,9 +6125,9 @@ static void loadall_sreg(I80386* cpu, uint32_t base, uint32_t offset, I80386_SEG
 	read_word_logical(cpu, base, offset + 0, &sreg->selector);
 }
 static void loadall_desc(I80386* cpu, uint32_t base, uint32_t offset, I80386_DESCRIPTOR_CACHE* descriptor) {
-	read_word_physical(cpu, base + offset + 0, &descriptor->ar.word);
-	read_dword_physical(cpu, base + offset + 4, &descriptor->base);
-	read_dword_physical(cpu, base + offset + 8, &descriptor->limit);
+	read_word_logical(cpu, base, offset + 0, &descriptor->ar.word);
+	read_dword_logical(cpu, base, offset + 4, &descriptor->base);
+	read_dword_logical(cpu, base, offset + 8, &descriptor->limit);
 }
 static void loadall(I80386* cpu) {
 	/* 0F 07 - load all */
@@ -6140,54 +6140,11 @@ static void loadall(I80386* cpu) {
 
 	uint32_t base = cpu->es.desc.base;
 	uint32_t offset = cpu->edi;
+	I80386_LOADALL buffer = { 0 };
 
-	typedef struct LOADALL_DESC_CACHE {
-		uint32_t ar;
-		uint32_t address;
-		uint32_t limit;
-	} LOADALL_DESC_CACHE;
-
-	typedef struct LOADALL {
-		uint32_t cr0;
-		uint32_t eflags;
-		uint32_t eip;
-		uint32_t edi;
-		uint32_t esi;
-		uint32_t ebp;
-		uint32_t esp;
-		uint32_t ebx;
-		uint32_t edx;
-		uint32_t ecx;
-		uint32_t eax;
-		uint32_t dr6;
-		uint32_t dr7;
-		uint32_t tr;
-		uint32_t ldt_selector;
-		uint32_t gs_selector;
-		uint32_t fs_selector;
-		uint32_t ds_selector;
-		uint32_t ss_selector;
-		uint32_t cs_selector;
-		uint32_t es_selector;
-		LOADALL_DESC_CACHE tss;
-		LOADALL_DESC_CACHE idt;
-		LOADALL_DESC_CACHE gdt;
-		LOADALL_DESC_CACHE ldt;
-		LOADALL_DESC_CACHE gs;
-		LOADALL_DESC_CACHE fs;
-		LOADALL_DESC_CACHE ds;
-		LOADALL_DESC_CACHE ss;
-		LOADALL_DESC_CACHE cs;
-		LOADALL_DESC_CACHE es;
-		uint32_t length;
-	} LOADALL;
-
-	LOADALL buffer = { 0 };
-	for (int i = 0; i < sizeof(LOADALL) / sizeof(uint32_t); ++i) {
-		if (!read_dword_logical(cpu, base, offset + (i * sizeof(uint32_t)), &((uint32_t*)&buffer)[i])) {
-			return;
+	for (uint32_t i = 0; i < sizeof(I80386_LOADALL); i += sizeof(uint32_t)) {
+		read_dword_logical(cpu, base, offset + i, &((uint32_t*)&buffer)[i]);
 		}
-	}
 
 	cpu->cr0.dword = buffer.cr0;
 	cpu->eflags.dword = buffer.eflags;
@@ -6209,44 +6166,44 @@ static void loadall(I80386* cpu) {
 
 	//cpu->tss
 
-	cpu->idtr.base = buffer.idt.address;
+	cpu->idtr.base = buffer.idt.base;
 	cpu->idtr.limit = buffer.idt.limit;
 
-	cpu->gdtr.base = buffer.gdt.address;
+	cpu->gdtr.base = buffer.gdt.base;
 	cpu->gdtr.limit = buffer.gdt.limit;
 
 	cpu->ldtr.selector = buffer.ldt_selector & 0xFFFF;
-	cpu->ldtr.desc.base = buffer.ldt.address;
+	cpu->ldtr.desc.base = buffer.ldt.base;
 	cpu->ldtr.desc.limit = buffer.ldt.limit;
 	cpu->ldtr.desc.ar.word = buffer.ldt.ar & 0xFFFF;
 
 	cpu->gs.selector = buffer.gs_selector & 0xFFFF;
-	cpu->gs.desc.base = buffer.gs.address;
+	cpu->gs.desc.base = buffer.gs.base;
 	cpu->gs.desc.limit = buffer.gs.limit;
 	cpu->gs.desc.ar.word = buffer.gs.ar & 0xFFFF;
 
 	cpu->fs.selector = buffer.fs_selector & 0xFFFF;
-	cpu->fs.desc.base = buffer.fs.address;
+	cpu->fs.desc.base = buffer.fs.base;
 	cpu->fs.desc.limit = buffer.fs.limit;
 	cpu->fs.desc.ar.word = buffer.fs.ar & 0xFFFF;
 
 	cpu->ds.selector = buffer.ds_selector & 0xFFFF;
-	cpu->ds.desc.base = buffer.ds.address;
+	cpu->ds.desc.base = buffer.ds.base;
 	cpu->ds.desc.limit = buffer.ds.limit;
 	cpu->ds.desc.ar.word = buffer.ds.ar & 0xFFFF;
 
 	cpu->ss.selector = buffer.ss_selector & 0xFFFF;
-	cpu->ss.desc.base = buffer.ss.address;
+	cpu->ss.desc.base = buffer.ss.base;
 	cpu->ss.desc.limit = buffer.ss.limit;
 	cpu->ss.desc.ar.word = buffer.ss.ar & 0xFFFF;
 
 	cpu->cs.selector = buffer.cs_selector & 0xFFFF;
-	cpu->cs.desc.base = buffer.cs.address;
+	cpu->cs.desc.base = buffer.cs.base;
 	cpu->cs.desc.limit = buffer.cs.limit;
 	cpu->cs.desc.ar.word = buffer.cs.ar & 0xFFFF;
 
 	cpu->es.selector = buffer.es_selector & 0xFFFF;
-	cpu->es.desc.base = buffer.es.address;
+	cpu->es.desc.base = buffer.es.base;
 	cpu->es.desc.limit = buffer.es.limit;
 	cpu->es.desc.ar.word = buffer.es.ar & 0xFFFF;
 }

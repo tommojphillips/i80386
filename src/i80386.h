@@ -590,7 +590,50 @@ typedef struct I80386_EXCEPTION {
 #define INTERNAL_FLAG_F1Z 0x01
 #define INTERNAL_FLAG_F1  0x02
 
-/* I80386 CPU State */
+/* i80386 Loadall descriptor cache */
+typedef struct I80386_LOADALL_DESC_CACHE {
+	uint32_t ar;
+	uint32_t base;
+	uint32_t limit;
+} I80386_LOADALL_DESC_CACHE;
+
+/* i80386 Loadall state */
+typedef struct I80386_LOADALL {
+	uint32_t cr0;
+	uint32_t eflags;
+	uint32_t eip;
+	uint32_t edi;
+	uint32_t esi;
+	uint32_t ebp;
+	uint32_t esp;
+	uint32_t ebx;
+	uint32_t edx;
+	uint32_t ecx;
+	uint32_t eax;
+	uint32_t dr6;
+	uint32_t dr7;
+	uint32_t tr;
+	uint32_t ldt_selector;
+	uint32_t gs_selector;
+	uint32_t fs_selector;
+	uint32_t ds_selector;
+	uint32_t ss_selector;
+	uint32_t cs_selector;
+	uint32_t es_selector;
+	I80386_LOADALL_DESC_CACHE tss;
+	I80386_LOADALL_DESC_CACHE idt;
+	I80386_LOADALL_DESC_CACHE gdt;
+	I80386_LOADALL_DESC_CACHE ldt;
+	I80386_LOADALL_DESC_CACHE gs;
+	I80386_LOADALL_DESC_CACHE fs;
+	I80386_LOADALL_DESC_CACHE ds;
+	I80386_LOADALL_DESC_CACHE ss;
+	I80386_LOADALL_DESC_CACHE cs;
+	I80386_LOADALL_DESC_CACHE es;
+	uint32_t length;
+} I80386_LOADALL;
+
+/* i80386 State */
 typedef struct I80386 {
 	union {
 		I80386_REG32 general_registers[I80386_REGISTER_COUNT];             /* general registers */
