@@ -341,38 +341,40 @@ typedef struct I80386_SIB {
 typedef struct I80386_DESCRIPTOR_ACCESS_RIGHTS {
 	union {
 		uint16_t word;
-		union {
-			struct {
-				uint8_t type         : 4; /* type */				
-				uint8_t s            : 1; /* 0 = system segment; 1 = code/data segment */	
-				uint8_t dpl          : 2; /* descriptor privilege level */
-				uint8_t present      : 1; /* present bit */
+		uint8_t type             : 4; /* type */
+		struct {
+			uint8_t accessed     : 1; /* accessed bit */
+			uint8_t rw           : 1; /* readable/writable */
+			uint8_t conforming   : 1; /* conforming. only applies to code segment */
+			uint8_t e            : 1; /* 0 = data segment; 1 = code segment */
+			uint8_t s            : 1; /* 0 = system segment; 1 = code/data segment */	
+			uint8_t dpl          : 2; /* descriptor privilege level.  00=ring0; 01=ring1; 02=ring2; 03=ring3 */
+			uint8_t present      : 1; /* present bit */
+				
 			uint8_t limit_hi     : 4; /* limit. bits 16-19 */
 			uint8_t available    : 1; /* available for programmers use */
 			uint8_t zero         : 1;
-			uint8_t default_size : 1; /* only applies to code segment */
-			uint8_t granularity  : 1; /* granularity bit. Specifies the units in which the limit field is interpreted. When the bit is clear, the
-			                             limit is interpreted in 1-byte units; when set, the limit is interpreted in 4-kilobyte units. */
+			uint8_t default_size : 1; /* default size bit. 0=16bit; 1=32bit. only applies to code segment */
+			uint8_t granularity  : 1; /* granularity bit. 0=1b; 1=4kb */
 		};
 		struct {
-				uint8_t accessed : 1; /* accessed bit */
-				uint8_t rw       : 1; /* readable/writable */
-				uint8_t dc       : 1; /* expand-down/comforming */
-				uint8_t e        : 1; /* 0 = data segment; 1 = code segment */
-				uint8_t b4       : 1;
-				uint8_t b5       : 1;
-				uint8_t b6       : 1;
-				uint8_t b7       : 1;
+			uint8_t b0           : 1;
+			uint8_t b1           : 1;
+			uint8_t expand_down  : 1; /* expand-down. only applies to stack segment */
+			uint8_t b3           : 1;
+			uint8_t b4           : 1;
+			uint8_t b5           : 1;
+			uint8_t b6           : 1;
+			uint8_t b7           : 1;
 
-				uint8_t b8       : 1;
-				uint8_t b9       : 1;
-				uint8_t b10      : 1;
-				uint8_t b11      : 1;
-				uint8_t b12      : 1;
-				uint8_t b13      : 1;
-				uint8_t big      : 1; /* only applies to data segment */
-				uint8_t b15      : 1;
-			};
+			uint8_t b8           : 1;
+			uint8_t b9           : 1;
+			uint8_t b10          : 1;
+			uint8_t b11          : 1;
+			uint8_t b12          : 1;
+			uint8_t b13          : 1;
+			uint8_t big          : 1; /* big bit. 0=sp; 1=esp. only applies to stack segment */
+			uint8_t b15          : 1;
 		};
 	};
 } I80386_DESCRIPTOR_ACCESS_RIGHTS;
@@ -399,7 +401,7 @@ typedef struct I80386_DESCRIPTOR_TABLE_REGISTER {
 } I80386_DESCRIPTOR_TABLE_REGISTER;
 
 /* i80386 Descriptor cache register */
-typedef struct I80386_DESCRIPTOR_CACHE {	
+typedef struct I80386_DESCRIPTOR_CACHE {
 	I80386_DESCRIPTOR_ACCESS_RIGHTS ar;
 	uint32_t base;                  /* base */
 	uint32_t limit;                 /* limit */
