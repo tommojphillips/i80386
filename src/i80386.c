@@ -4198,23 +4198,23 @@ static void ret_intra(I80386* cpu) {
 }
 static void ret_inter(I80386* cpu) {
 	/* retf/retfd <Iw> (CA/CB) b1100101E */
-	uint32_t eip = 0;
+	uint32_t offset = 0;
 	uint32_t final_esp = cpu->esp;
-	uint16_t cs = 0;
+	uint16_t selector = 0;
 	uint16_t frame = 0;
+	I80386_SEGMENT_REGISTER sreg = { 0 };
 
 	/* lock raises #UD */
 	if (cpu->lock_prefix) {
 		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
-	if (!cpu->msw.pe) {
-		/* Real mode */
+
 		if (cpu->operand_size) {
-			if (!pop_dword_at(cpu, &final_esp, &eip)) {
+		if (!pop_dword_at(cpu, &final_esp, &offset)) {
 				return;
 			}
-			if (!pop_word_align_at(cpu, &final_esp, &cs)) {
+		if (!pop_word_align_at(cpu, &final_esp, &selector)) {
 				return;
 			}
 		}
@@ -4223,11 +4223,15 @@ static void ret_inter(I80386* cpu) {
 			if (!pop_word_at(cpu, &final_esp, &ip)) {
 				return;
 			}
-			eip = ip;
-			if (!pop_word_at(cpu, &final_esp, &cs)) {
+		offset = ip;
+		if (!pop_word_at(cpu, &final_esp, &selector)) {
 				return;
 			}
 		}
+
+	if (!cpu->msw.pe) {
+		/* Real mode */
+		
 	}
 	else if (cpu->eflags.vm) {
 		/* Virtual 8086 mode */
@@ -4262,10 +4266,16 @@ static void ret_inter(I80386* cpu) {
 		}
 	}
 
-	if (eip > cpu->cs.desc.limit) {
+	if (!i80386_load_segment_register(cpu, &sreg, SEG_CS, selector)) {
+		return;
+	}
+
+	if (offset > sreg.desc.limit) {
 		i80386_exception(cpu, EXCEPTION_GP);
 		return;
 	}
+
+	/* fetch frame word count */
 	if (!(cpu->opcode & 0x1)) {
 		if (!fetch_word(cpu, &frame)) {
 			return;
@@ -4273,17 +4283,16 @@ static void ret_inter(I80386* cpu) {
 	}
 
 	/* commit final register values */
+	i80386_copy_segment_descriptor(&cpu->cs, &sreg);
+	cpu->eip = offset;
+
 	if (cpu->address_size) {
 		cpu->esp = (final_esp + frame);
 	}
 	else {
 		cpu->esp = (final_esp + frame) & 0xFFFF;
 	}
-	if (!i80386_load_segment_register(cpu, &cpu->cs, SEG_CS, cs)) {
-		return;
 	}
-	cpu->eip = eip;
-}
 
 static void mov_rm_imm(I80386* cpu) {
 	/* mov Eb,Ib / Ev,Iv - (C6/C7) b1100011W */
