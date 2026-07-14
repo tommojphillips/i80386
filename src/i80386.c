@@ -5835,12 +5835,74 @@ static void lldt(I80386* cpu) {
 }
 static void ltr(I80386* cpu) {
 	/* Ew - Load task register (0F 00 /3) */
+	I80386_OPERAND rm = { 0 };
+	uint16_t selector = 0;
+	I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };
 
 	/* real mode or virtual 8086 raises #UD */
 	if (!cpu->msw.pe || (cpu->msw.pe && cpu->eflags.vm)) {
 		i80386_exception(cpu, EXCEPTION_UD);
 		return;
 	}
+
+	/* Must be ring 0 */
+	if (cpu->cpl != 0) {
+		i80386_exception(cpu, EXCEPTION_GP);
+		return;
+	}
+
+	if (!modrm_get_rm(cpu, &rm)) {
+		return;
+	}
+
+	if (!modrm_read_rm16(cpu, &rm, &selector)) {
+		return;
+	}
+
+	/* TR cannot have a NULL selector */
+	if ((selector & 0xFFF8) == 0) {
+		i80386_exception_code(cpu, EXCEPTION_GP, 0);
+		return;
+	}
+
+	/* TI must be 0 (GDT) */
+	if (selector & 0x4) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
+		return;
+	}
+
+	if (!i80386_read_descriptor_table_entry(cpu, selector, &entry)) {
+		return;
+	}
+
+	if (!entry.ar.present) {
+		i80386_exception_code(cpu, EXCEPTION_NP, selector);
+		return;
+	}
+
+	switch (entry.ar.type) {
+		case I80386_GATE_TYPE_AVAL_286:
+		case I80386_GATE_TYPE_AVAL_386:
+			break;
+
+		default:
+			i80386_exception_code(cpu, EXCEPTION_GP, selector);
+			return;
+	}
+
+	/* Mark descriptor busy */
+	if (entry.ar.type == I80386_GATE_TYPE_AVAL_286) {
+		entry.ar.type = I80386_GATE_TYPE_BUSY_286;
+}
+	else {
+		entry.ar.type = I80386_GATE_TYPE_BUSY_386;
+	}
+
+	if (!i80386_write_descriptor_table_entry(cpu, selector, &entry)) {
+		return;
+	}
+
+	i80386_load_segment_register(cpu, &cpu->tr, SEG_TR, selector);
 }
 static void verr(I80386* cpu) {
 	/* Ew - (0F 00 /4) */
