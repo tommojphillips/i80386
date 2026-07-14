@@ -2009,7 +2009,7 @@ static void i80386_insert_tlb(I80386* cpu, uint32_t linear_page, I80386_PAGE_TAB
 
 /* Task functions */
 
-static int i80386_task_load_from_tss_image(I80386* cpu, const I80386_TASK_STATE_SEGMENT* tss) {
+static int i80386_task_load_tss(I80386* cpu, const I80386_TASK_STATE_SEGMENT* tss) {
 	/* Load CPU State from tss image */
 
 	I80386_SEGMENT_REGISTER es = { 0 };
@@ -2019,6 +2019,7 @@ static int i80386_task_load_from_tss_image(I80386* cpu, const I80386_TASK_STATE_
 	I80386_SEGMENT_REGISTER fs = { 0 };
 	I80386_SEGMENT_REGISTER gs = { 0 };
 	I80386_SEGMENT_REGISTER ldtr = { 0 };
+
 	if (!i80386_load_segment_register(cpu, &es, SEG_ES, tss->es & 0xFFFF)) {
 		return 0;
 	}
@@ -2037,7 +2038,7 @@ static int i80386_task_load_from_tss_image(I80386* cpu, const I80386_TASK_STATE_
 	if (!i80386_load_segment_register(cpu, &gs, SEG_GS, tss->gs & 0xFFFF)) {
 		return 0;
 	}
-	if (!i80386_load_segment_register(cpu, &ldtr, -1, tss->ldt & 0xFFFF)) {
+	if (!i80386_load_segment_register(cpu, &ldtr, SEG_LDT, tss->ldt & 0xFFFF)) {
 		return 0;
 	}
 
@@ -2052,16 +2053,19 @@ static int i80386_task_load_from_tss_image(I80386* cpu, const I80386_TASK_STATE_
 	cpu->ebp = tss->ebp;
 	cpu->esi = tss->esi;
 	cpu->edi = tss->edi;
+
 	i80386_copy_segment_descriptor(&cpu->es, &es);
 	i80386_copy_segment_descriptor(&cpu->cs, &cs);
 	i80386_copy_segment_descriptor(&cpu->ss, &ss);
 	i80386_copy_segment_descriptor(&cpu->ds, &ds);
 	i80386_copy_segment_descriptor(&cpu->fs, &fs);
 	i80386_copy_segment_descriptor(&cpu->gs, &gs);
+	i80386_copy_segment_descriptor(&cpu->ldtr, &ldtr);
+
 	i80386_flush_tlb(cpu);
 	return 1;
 }
-static int i80386_task_store_to_tss_image(const I80386* cpu, I80386_TASK_STATE_SEGMENT* tss) {
+static int i80386_task_store_tss(const I80386* cpu, I80386_TASK_STATE_SEGMENT* tss) {
 	/* Store CPU State to tss image */
 	tss->cr3 = cpu->cr3;
 	tss->eip = cpu->eip;
@@ -2083,7 +2087,7 @@ static int i80386_task_store_to_tss_image(const I80386* cpu, I80386_TASK_STATE_S
 	tss->ldt = cpu->ldtr.selector;
 	return 1;
 }
-static int i80386_task_read_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80386_TASK_STATE_SEGMENT* tss) {
+static int i80386_task_read_tss(I80386* cpu, const I80386_DESCRIPTOR_CACHE* cache, I80386_TASK_STATE_SEGMENT* tss) {
 	if (!cache->ar.present) {
 		i80386_exception_code(cpu, EXCEPTION_NP, 0);
 		return 0;
@@ -2095,12 +2099,12 @@ static int i80386_task_read_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80
 	}
 
 	for (int i = 0; i < sizeof(I80386_TASK_STATE_SEGMENT) / 4; ++i) {
-		read_dword_physical(cpu, cache->base + i * 4, &tss->values[i]);
+		read_dword_logical(cpu, cache->base, i * 4, &tss->values[i]);
 	}
 
 	return 1;
 }
-static int i80386_task_write_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I80386_TASK_STATE_SEGMENT* tss) {
+static int i80386_task_write_tss(I80386* cpu, const I80386_DESCRIPTOR_CACHE* cache, const I80386_TASK_STATE_SEGMENT* tss) {
 	if (!cache->ar.present) {
 		i80386_exception_code(cpu, EXCEPTION_NP, 0);
 		return 0;
@@ -2112,7 +2116,7 @@ static int i80386_task_write_tss(I80386* cpu, I80386_DESCRIPTOR_CACHE* cache, I8
 	}
 
 	for (int i = 0; i < sizeof(I80386_TASK_STATE_SEGMENT) / 4; ++i) {
-		write_dword_physical(cpu, cache->base + i * 4, tss->values[i]);
+		write_dword_logical(cpu, cache->base, i * 4, tss->values[i]);
 	}
 
 	return 1;

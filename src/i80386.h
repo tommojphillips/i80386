@@ -265,15 +265,10 @@ typedef struct I80386_TASK_STATE_SEGMENT {
 		uint32_t values[26];
 		struct {
 			uint32_t back_link;
-			uint32_t esp0;
-			uint16_t ss0;
-			uint16_t r0;
-			uint32_t esp1;
-			uint16_t ss1;
-			uint16_t r1;
-			uint32_t esp2;
-			uint16_t ss2;
-			uint16_t r2;
+			struct {
+				uint32_t esp;
+				uint16_t ss;
+			} stacks[3];
 			uint32_t cr3;
 			uint32_t eip;
 			uint32_t eflags;
@@ -505,21 +500,23 @@ typedef struct I80386_TLB {
 	I80386_TLB_ENTRY entries[I80386_TLB_SIZE];
 } I80386_TLB;
 
-#define I80386_GATE_TYPE_AVAL_286 0x1
-#define I80386_GATE_TYPE_LDT      0x2
-#define I80386_GATE_TYPE_BUSY_286 0x3
-#define I80386_GATE_TYPE_CALL_286 0x4
-#define I80386_GATE_TYPE_TASK     0x5
-#define I80386_GATE_TYPE_INT_286  0x6
-#define I80386_GATE_TYPE_TRAP_286 0x7
-#define I80386_GATE_TYPE_AVAL_386 0x9
-#define I80386_GATE_TYPE_BUSY_386 0xB
-#define I80386_GATE_TYPE_CALL_386 0xC
-#define I80386_GATE_TYPE_INT_386  0xE
-#define I80386_GATE_TYPE_TRAP_386 0xF
+#define I80386_GATE_TYPE_LDT      0b0010 /* LDT gate */
+#define I80386_GATE_TYPE_TASK     0b0101 /* Task gate */
 
-#define I80386_INTERRUPT_TYPE_SOFTWARE 0x1
-#define I80386_INTERRUPT_TYPE_HARDWARE 0x2
+#define I80386_GATE_TYPE_AVAL_286 0b0001 /* Task avaliable 286 */
+#define I80386_GATE_TYPE_BUSY_286 0b0011 /* Task busy 286 */
+#define I80386_GATE_TYPE_CALL_286 0b0100 /* Call gate 286 */
+#define I80386_GATE_TYPE_INT_286  0b0110 /* Int gate 286 */
+#define I80386_GATE_TYPE_TRAP_286 0b0111 /* Trap gate 286 */
+
+#define I80386_GATE_TYPE_AVAL_386 0b1001 /* Task avaliable 386 */
+#define I80386_GATE_TYPE_BUSY_386 0b1011 /* Task busy 386 */
+#define I80386_GATE_TYPE_CALL_386 0b1100 /* Call gate 386 */
+#define I80386_GATE_TYPE_INT_386  0b1110 /* Int gate 386 */
+#define I80386_GATE_TYPE_TRAP_386 0b1111 /* Trap gate 386 */
+
+#define I80386_INTERRUPT_TYPE_SOFTWARE 0x1 /* Software interrupt */
+#define I80386_INTERRUPT_TYPE_HARDWARE 0x2 /* Hardware interrupt */
 
 /*  i80386 Gate */
 typedef struct I80386_GATE {
@@ -528,11 +525,12 @@ typedef struct I80386_GATE {
 		struct {
 			uint16_t offset_lo;
 			uint16_t selector;
-			uint8_t param_count; /* only for CALL; reserved for IDT */
+			uint8_t param_count; /* only valid for CALL; otherwise reserved */
 			union {
 				uint8_t access;
 				struct {
-					uint8_t type    : 5;
+					uint8_t type    : 4; /*  I80386_GATE_TYPE_ */
+					uint8_t s       : 1; /*  0=system; 1=code/data */
 					uint8_t dpl     : 2; /* descriptor privilege level */
 					uint8_t present : 1; /* present bit */
 				};
