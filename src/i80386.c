@@ -55,6 +55,8 @@
 void i80386_exception(I80386* cpu, uint8_t exception);
 void i80386_exception_code(I80386* cpu, uint8_t exception, uint16_t code);
 void i80386_page_fault(I80386* cpu, uint32_t address, int present, int is_write);
+static int i80386_task_switch(I80386* cpu, uint16_t selector, I80386_TASK_SWITCH_REASON reason);
+static int i80386_task_gate(I80386* cpu, const I80386_DESCRIPTOR_TABLE_ENTRY* entry, I80386_TASK_SWITCH_REASON reason);
 
 static void read_dword_physical(const I80386* cpu, uint32_t address, uint32_t* value);
 static void write_dword_physical(const I80386* cpu, uint32_t address, uint32_t value);
@@ -6622,9 +6624,6 @@ static int i80386_fetch(I80386* cpu) {
 	cpu->effective_address.stack_address = 0;
 	cpu->effective_address.valid = 0;
 	cpu->effective_address.segment_index = 0;
-	cpu->effective_address.base = 0;
-	cpu->effective_address.scale = 0;
-	cpu->effective_address.index = 0;
 	cpu->effective_address.logical_address.offset = 0;
 	cpu->effective_address.logical_address.base = 0;
 	
@@ -7596,6 +7595,11 @@ void i80386_reset(I80386* cpu) {
 	cpu->ldtr.desc.limit = 0x00000000;
 	cpu->ldtr.desc.ar.word = 0x0000;
 
+	cpu->tr.selector = 0x00000000;
+	cpu->tr.desc.base = 0x00000000;
+	cpu->tr.desc.limit = 0x00000000;
+	cpu->tr.desc.ar.word = 0x0000;
+
 	cpu->eip = 0x0000FFF0;
 	cpu->cs.selector = 0xF000;
 	cpu->cs.desc.base = 0xFFFF0000;
@@ -7960,7 +7964,7 @@ void i80386_copy_segment_descriptor(I80386_SEGMENT_REGISTER* dest, const I80386_
 	dest->desc.limit = src->desc.limit;
 	dest->desc.ar.word = src->desc.ar.word;
 }
-int i80386_resolve_segment_selector(const I80386* cpu, uint16_t selector, uint32_t* base) {
+int i80386_resolve_segment_selector(I80386* cpu, uint16_t selector, uint32_t* base) {
 	if (cpu->msw.pe && !cpu->eflags.vm) {
 		/* Protected mode */
 		I80386_DESCRIPTOR_TABLE_ENTRY entry = { 0 };

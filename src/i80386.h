@@ -382,7 +382,6 @@ typedef struct I80386_DESCRIPTOR_ACCESS_RIGHTS {
 typedef struct I80386_DESCRIPTOR_TABLE_ENTRY {
 	union {
 		uint64_t qword;
-		uint8_t bytes[8];
 		struct {
 			uint16_t limit_lo; /* segment limit. bits 0-15 */
 			uint16_t base_lo;  /* segment base. bits 0-15 */
