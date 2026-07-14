@@ -1105,6 +1105,7 @@ static int exec_bin_load_descriptor_table_register(I80386* cpu, I80386_DESCRIPTO
 	return 1;
 }
 static int exec_bin_bit_test(I80386* cpu, I80386_ALU16_FUNC op16, I80386_ALU32_FUNC op32, int wb) {
+	/* bit test - Ev,Gv */
 	I80386_OPERAND rm = { 0 };
 
 	if (!fetch_modrm(cpu)) {
@@ -2728,14 +2729,14 @@ static void salc(I80386* cpu) {
 }
 
 static void push_seg(I80386* cpu) {
-	/* Push seg16 - (06/0E/16/1E/A0/A8) bX0ESRXXX */
+	/* Push SR - (06/0E/16/1E/A0/A8) bX0ESRXXX */
 	uint8_t esr = ESR;
 	if (esr < I80386_SEGMENT_COUNT) {
 		push_word(cpu, cpu->segment_registers[esr].selector);
 	}
 }
 static void pop_seg(I80386* cpu) {
-	/* Pop seg16 (07/0F/17/1F/A1/A9) bX0ESRXXX */
+	/* Pop SR (07/0F/17/1F/A1/A9) bX0ESRXXX */
 	uint8_t esr = ESR;
 	uint16_t selector = 0;
 	if (!pop_word(cpu, &selector)) {
@@ -2749,7 +2750,7 @@ static void pop_seg(I80386* cpu) {
 	}
 }
 static void push_reg(I80386* cpu) {
-	/* Push reg16 (50-57) b01010REG */
+	/* Push REG (50-57) b01010REG */
 
 	/* The 80386 PUSH SP instruction pushes
 	   the value of SP as it existed before the
@@ -2780,7 +2781,7 @@ static void push_reg(I80386* cpu) {
 	}
 }
 static void pop_reg(I80386* cpu) {
-	/* Pop reg16 (58-5F) b01011REG */
+	/* Pop REG (58-5F) b01011REG */
 	if (cpu->operand_size) {
 		uint32_t tmp = 0;
 		if (cpu->address_size) {
@@ -2807,7 +2808,7 @@ static void pop_reg(I80386* cpu) {
 	}
 }
 static void push_rm(I80386* cpu) {
-	/* Push R/M (FF, R/M reg = 110) b11111111 */
+	/* Push R/M (FF, R/M reg = b110) b11111111 */
 	I80386_OPERAND rm = { 0 };
 
 	/* lock raises #UD */
@@ -3263,7 +3264,7 @@ static void std(I80386* cpu) {
 }
 
 static void inc_reg(I80386* cpu) {
-	/* Inc reg16 (40-47) b01000REG */
+	/* Inc REG (40-47) b01000REG */
 	if (cpu->operand_size) {
 		uint32_t tmp = reg32_read(cpu, cpu->opcode);
 		i80386_alu_inc32(cpu, &tmp);
@@ -3308,9 +3309,8 @@ static void inc_rm(I80386* cpu) {
 		modrm_write_rm8(cpu, &rm, tmp);
 	}
 }
-
 static void dec_reg(I80386* cpu) {
-	/* Dec reg16 (48-4F) b01001REG */
+	/* Dec REG (48-4F) b01001REG */
 	if (cpu->operand_size) {
 		uint32_t tmp = reg32_read(cpu, cpu->opcode);
 		i80386_alu_dec32(cpu, &tmp);
@@ -3357,35 +3357,35 @@ static void dec_rm(I80386* cpu) {
 }
 
 static void rol_rm_cl(I80386* cpu) {
-	/* Rotate left (D0/D1/D2/D3, R/M reg = 000) b110100VW */
+	/* Rotate left (D0/D1/D2/D3, R/M reg = b000) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_rol8, i80386_alu_rol16, i80386_alu_rol32);
 }
 static void ror_rm_cl(I80386* cpu) {
-	/* Rotate left (D0/D1/D2/D3, R/M reg = 001) b110100VW */
+	/* Rotate left (D0/D1/D2/D3, R/M reg = b001) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_ror8, i80386_alu_ror16, i80386_alu_ror32);
 }
 static void rcl_rm_cl(I80386* cpu) {
-	/* Rotate through carry left (D0/D1/D2/D3, R/M reg = 010) b110100VW */
+	/* Rotate through carry left (D0/D1/D2/D3, R/M reg = b010) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_rcl8, i80386_alu_rcl16, i80386_alu_rcl32);
 }
 static void rcr_rm_cl(I80386* cpu) {
-	/* Rotate through carry right (D0/D1/D2/D3, R/M reg = 011) b110100VW */
+	/* Rotate through carry right (D0/D1/D2/D3, R/M reg = b011) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_rcr8, i80386_alu_rcr16, i80386_alu_rcr32);
 }
 static void shl_rm_cl(I80386* cpu) {
-	/* Shift left (D0/D1/D2/D3, R/M reg = 100) b110100VW */
+	/* Shift left (D0/D1/D2/D3, R/M reg = b100) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_shl8, i80386_alu_shl16, i80386_alu_shl32);
 }
 static void shr_rm_cl(I80386* cpu) {
-	/* Shift Logical right (D0/D1/D2/D3, R/M reg = 101) b110100VW */
+	/* Shift Logical right (D0/D1/D2/D3, R/M reg = b101) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_shr8, i80386_alu_shr16, i80386_alu_shr32);
 }
 static void sal_rm_cl(I80386* cpu) {
-	/* Shift Arithmetic left (D0/D1/D2/D3, R/M reg = 110) b110100VW */
+	/* Shift Arithmetic left (D0/D1/D2/D3, R/M reg = b110) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_sal8, i80386_alu_sal16, i80386_alu_sal32);
 }
 static void sar_rm_cl(I80386* cpu) {
-	/* Shift Arithmetic right (D0/D1/D2/D3, R/M reg = 111) b110100VW */
+	/* Shift Arithmetic right (D0/D1/D2/D3, R/M reg = b111) b110100VW */
 	exec_bin_grp2_cl(cpu, i80386_alu_sar8, i80386_alu_sar16, i80386_alu_sar32);
 }
 static void shld_rm_cl(I80386* cpu) {
@@ -3498,35 +3498,35 @@ static void shrd_rm_cl(I80386* cpu) {
 }
 
 static void rol_rm_imm(I80386* cpu) {
-	/* Rotate left (C0/C1, R/M reg = 000) b1100000W */
+	/* Rotate left (C0/C1, R/M reg = b000) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_rol8, i80386_alu_rol16, i80386_alu_rol32);
 }
 static void ror_rm_imm(I80386* cpu) {
-	/* Rotate left (C0/C1, R/M reg = 001) b1100000W */
+	/* Rotate left (C0/C1, R/M reg = b001) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_ror8, i80386_alu_ror16, i80386_alu_ror32);
 }
 static void rcl_rm_imm(I80386* cpu) {
-	/* Rotate through carry left (C0/C1, R/M reg = 010) b1100000W */
+	/* Rotate through carry left (C0/C1, R/M reg = b010) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_rcl8, i80386_alu_rcl16, i80386_alu_rcl32);
 }
 static void rcr_rm_imm(I80386* cpu) {
-	/* Rotate through carry right (C0/C1, R/M reg = 011) b1100000W */
+	/* Rotate through carry right (C0/C1, R/M reg = b011) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_rcr8, i80386_alu_rcr16, i80386_alu_rcr32);
 }
 static void shl_rm_imm(I80386* cpu) {
-	/* Shift left (C0/C1, R/M reg = 100) b1100000W */
+	/* Shift left (C0/C1, R/M reg = b100) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_shl8, i80386_alu_shl16, i80386_alu_shl32);
 }
 static void shr_rm_imm(I80386* cpu) {
-	/* Shift Logical right (C0/C1, R/M reg = 101) b1100000W */
+	/* Shift Logical right (C0/C1, R/M reg = b101) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_shr8, i80386_alu_shr16, i80386_alu_shr32);
 }
 static void sal_rm_imm(I80386* cpu) {
-	/* Shift Arithmetic left (C0/C1, R/M reg = 110) b1100000W */
+	/* Shift Arithmetic left (C0/C1, R/M reg = b110) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_sal8, i80386_alu_sal16, i80386_alu_sal32);
 }
 static void sar_rm_imm(I80386* cpu) {
-	/* Shift Arithmetic right (C0/C1, R/M reg = 111) b1100000W */
+	/* Shift Arithmetic right (C0/C1, R/M reg = b111) b1100000W */
 	exec_bin_grp2_imm(cpu, i80386_alu_sar8, i80386_alu_sar16, i80386_alu_sar32);
 }
 static void shld_rm_imm(I80386* cpu) {
