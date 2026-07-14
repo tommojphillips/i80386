@@ -7655,7 +7655,7 @@ int i80386_read_descriptor_table_entry(const I80386* cpu, uint16_t selector, I80
 	uint8_t rpl = selector & 3U;        /* requestor's privilege level */
 	uint8_t ti = (selector >> 2U) & 1U; /* type */
 int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
-	uint8_t ti = (selector >> 2U) & 1U;       /* type */
+	uint8_t ti = selector & 0x04;       /* type */
 	uint16_t index = selector & 0xFFF8; /* entry index */
 
 	uint32_t limit = 0;
@@ -7663,7 +7663,10 @@ int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DE
 
 	if (ti) {
 		/* LDT */
-		/* todo: validate current LDTR */
+		if ((cpu->ldtr.selector & 0xFFF8) == 0) {
+			i80386_exception_code(cpu, EXCEPTION_TS, selector);
+			return 0; /* #TS(selector) */
+		}
 		limit = cpu->ldtr.desc.limit;
 		base = cpu->ldtr.desc.base;
 	}
@@ -7674,6 +7677,7 @@ int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DE
 	}
 
 	if (index + 7U > limit) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
 		return 0;
 	}
 
@@ -7682,7 +7686,7 @@ int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DE
 	return 1; /* success */
 }
 int i80386_write_descriptor_table_entry(I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
-	uint8_t ti = (selector >> 2U) & 1U; /* type */
+	uint8_t ti = selector & 0x04;       /* type */
 	uint16_t index = selector & 0xFFF8; /* entry index */	
 
 	uint32_t limit = 0;
@@ -7690,7 +7694,10 @@ int i80386_write_descriptor_table_entry(I80386* cpu, uint16_t selector, const I8
 
 	if (ti) {
 		/* LDT */
-		/* todo: validate current LDTR */
+		if ((cpu->ldtr.selector & 0xFFF8) == 0) {
+			i80386_exception_code(cpu, EXCEPTION_TS, selector);
+			return 0; /* #TS(selector) */
+		}
 		limit = cpu->ldtr.desc.limit;
 		base = cpu->ldtr.desc.base;
 	}
@@ -7701,6 +7708,7 @@ int i80386_write_descriptor_table_entry(I80386* cpu, uint16_t selector, const I8
 	}
 
 	if (index + 7U > limit) {
+		i80386_exception_code(cpu, EXCEPTION_GP, selector);
 		return 0;
 	}
 
