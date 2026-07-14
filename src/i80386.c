@@ -7654,6 +7654,8 @@ uint32_t i80386_get_physical_address_so(uint16_t selector, uint32_t offset) {
 int i80386_read_descriptor_table_entry(const I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
 	uint8_t rpl = selector & 3U;        /* requestor's privilege level */
 	uint8_t ti = (selector >> 2U) & 1U; /* type */
+int i80386_read_descriptor_table_entry(I80386* cpu, uint16_t selector, I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
+	uint8_t ti = (selector >> 2U) & 1U;       /* type */
 	uint16_t index = selector & 0xFFF8; /* entry index */
 
 	uint32_t limit = 0;
@@ -7675,12 +7677,11 @@ int i80386_read_descriptor_table_entry(const I80386* cpu, uint16_t selector, I80
 		return 0;
 	}
 
-	read_qword_physical(cpu, base + index, &entry->qword);
+	read_qword_logical(cpu, base, index, &entry->qword);
 	
 	return 1; /* success */
 }
-int i80386_write_descriptor_table_entry(const I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
-	uint8_t rpl = selector & 3U;        /* requestor's privilege level */
+int i80386_write_descriptor_table_entry(I80386* cpu, uint16_t selector, const I80386_DESCRIPTOR_TABLE_ENTRY* entry) {
 	uint8_t ti = (selector >> 2U) & 1U; /* type */
 	uint16_t index = selector & 0xFFF8; /* entry index */	
 
@@ -7703,7 +7704,7 @@ int i80386_write_descriptor_table_entry(const I80386* cpu, uint16_t selector, co
 		return 0;
 	}
 
-	write_qword_physical(cpu, base + index, entry->qword);
+	write_qword_logical(cpu, base, index, entry->qword);
 	
 	return 1; /* success */
 }
